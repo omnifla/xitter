@@ -248,7 +248,20 @@ async function readOperationTypes() {
 
 void readOperationTypes();
 
+const XCALL_MUTATIONS = new Set([
+        "xCallsStartCall",
+        "xCallsRequestToken",
+        "xCallsRecoverMedia",
+        "xCallsJoinCall",
+        "xCallsLeaveCall",
+        "xCallsRequestJoinCall",
+        "xCallsGenerateAuthToken",
+        "xCallsSendCallEvent",
+        "xCallsSendSignal",
+]);
+
 export const isMutation = (operation: string) =>
+        XCALL_MUTATIONS.has(operation) ||
         operationTypes.mutations.has(operation) ||
         (/Mutation$/.test(operation) && !operationTypes.queries.has(operation));
 
@@ -269,6 +282,7 @@ export function bucketsFor(method: string, path: string, operation: string | und
 	if (operation) {
 		if (POST_OPS.test(operation)) return ["read", "post"];
 		if (ENGAGE_OPS.test(operation)) return ["read", "engage"];
+		if (XCALL_MUTATIONS.has(operation)) return ["read", "dm"];
 		if (DM_OPS.test(operation)) return method === "GET" ? ["read"] : ["read", "dm"];
 		return method === "GET" || (operationTypes.queries.has(operation) && !operationTypes.mutations.has(operation)) ? ["read"] : ["read", "write"];
 	}

@@ -1420,6 +1420,59 @@ end $$;
 drop trigger if exists users_admins_unblocked on users;
 create trigger users_admins_unblocked after update of role on users for each row execute function admins_unblocked();
 delete from blocks bl using users b, users t where b.id = bl.blocker_id and t.id = bl.blocked_id and b.instance is null and t.role = 'admin' and t.instance is null;
-
 -- profile decor for gold-check accounts, from the Steam Points Shop (decor.ts)
 alter table users add column if not exists decor jsonb;
+
+create table if not exists xcalls_calls (
+    id text primary key,
+    conversation_id text,
+    created_by bigint not null references users(id) on delete cascade,
+    status text not null default 'created'
+        check (status in ('created', 'active', 'ended', 'failed')),
+    call_type smallint not null default 1
+        check (call_type in (1, 2, 3)),
+    room_id text,
+    provider_session_id text,
+    metadata jsonb not null default '{}',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    ended_at timestamptz
+);
+
+create index if not exists xcalls_calls_conversation_idx
+    on xcalls_calls (conversation_id, created_at desc);
+
+create index if not exists xcalls_calls_status_idx
+    on xcalls_calls (status, updated_at desc);
+
+create unique index if not exists xcalls_one_live_call_per_conversation_idx
+    on xcalls_calls (conversation_id)
+    where conversation_id is not null and status in ('created', 'active');
+
+create table if not exists xcalls_participants (
+    call_id text not null references xcalls_calls(id) on delete cascade,
+    user_id bigint not null references users(id) on delete cascade,
+    state text not null default 'invited'
+        check (state in ('invited', 'requested', 'joined', 'left', 'declined')),
+    role text not null default 'participant'
+        check (role in ('host', 'participant')),
+    joined_at timestamptz,
+    left_at timestamptz,
+    created_at timestamptz not null default now(),
+    primary key (call_id, user_id)
+);
+
+create index if not exists xcalls_participants_user_idx
+    on xcalls_participants (user_id, state);
+
+create table if not exists xcalls_events (
+    id bigserial primary key,
+    call_id text not null references xcalls_calls(id) on delete cascade,
+    actor_id bigint references users(id) on delete set null,
+    event_type text not null,
+    payload jsonb not null default '{}',
+    created_at timestamptz not null default now()
+);
+
+create index if not exists xcalls_events_call_idx
+    on xcalls_events (call_id, id);

@@ -534,8 +534,226 @@ async function deleteMessages(v: Viewer, vars: Vars) {
 	return { data: { xchat_delete_messages: { __typename: "DeleteMessageResponse", error_code: null } } };
 }
 
+
+type XCallRow = {
+    id: string;
+    conversation_id: string | null;
+    created_by: string;
+    status: string;
+    call_type: number;
+    created_at: Date | string;
+    updated_at: Date | string;
+    ended_at: Date | string | null;
+};
+
+function xcallId(vars: Vars): string {
+    return String(vars.call_id ?? vars.callId ?? vars.conference_id ?? vars.id ?? "").trim();
+}
+
+async function getXCall(id: string): Promise<XCallRow | undefined> {
+    if (!id || id.length > 128) throw new ChatError("Call unavailable.");
+    const [call] = await sql`
+        select id, conversation_id, created_by::text, status, call_type,
+               created_at, updated_at, ended_at
+        from xcalls_calls where id = ${id}
+    `;
+    return call as XCallRow | undefined;
+}
+
+async function authorizeXCall(v: Viewer, call: XCallRow) {
+    if (call.conversation_id) await authorized(v.id, call.conversation_id);
+    const [participant] = await sql`
+        select state from xcalls_participants
+        where call_id = ${call.id} and user_id = ${v.id}::bigint
+    `;
+    if (call.created_by !== v.id && !participant && call.call_type !== 1) {
+        throw new ChatError("You are not allowed to access this call.");
+    }
+    return call.created_by === v.id || !!participant || call.call_type === 1;
+}
+
+function xcallResult(call: XCallRow) {
+    return {
+        id: call.id,
+        call_id: call.id,
+        conversation_id: call.conversation_id,
+        call_type: call.call_type,
+        status: call.status,
+        created_by: call.created_by,
+        created_at: new Date(call.created_at).getTime(),
+        updated_at: new Date(call.updated_at).getTime(),
+        ended_at: call.ended_at ? new Date(call.ended_at).getTime() : null,
+    };
+}
+
+async function startXCall(v: Viewer, vars: Vars) {
+    if (v.status !== "active") throw new ChatError("Your account cannot start calls.");
+    const conversationId = String(vars.conversation_id ?? vars.conversationId ?? "").trim() || null;
+    const callType = Number(vars.call_type ?? vars.callType ?? 1);
+    if (![1, 2, 3].includes(callType)) throw new ChatError("Invalid call type.");
+    if (conversationId) await authorized(v.id, conversationId);
+
+    const id = newId();
+    try {
+        await sql.begin(async (tx) => {
+            await tx`
+                insert into xcalls_calls (id, conversation_id, created_by, call_type)
+                values (${id}, ${conversationId}, ${v.id}::bigint, ${callType})
+            `;
+            await tx`
+                insert into xcalls_participants (call_id, user_id, state, role, joined_at)
+                values (${id}, ${v.id}::bigint, 'joined', 'host', now())
+            `;
+            await tx`
+                insert into xcalls_events (call_id, actor_id, event_type, payload)
+                values (${id}, ${v.id}::bigint, 'call_started',
+                    ${JSON.stringify({ call_type: callType, conversation_id: conversationId })}::jsonb)
+            `;
+        });
+    } catch (error) {
+        if ((error as { code?: string })?.code === "23505") {
+            throw new ChatError("There is already an active call in this conversation.");
+        }
+        throw error;
+    }
+
+    const call = await getXCall(id);
+    if (!call) throw new ChatError("Call could not be created.");
+    return { data: { xchat_start_call: { call: xcallResult(call), media_credentials: null, media_session_id: null } } };
+}
+
+async function getXCallPreJoinData(v: Viewer, vars: Vars) {
+    const call = await getXCall(xcallId(vars));
+    if (!call || ["ended", "failed"].includes(call.status)) throw new ChatError("Call unavailable.");
+    const mayJoin = await authorizeXCall(v, call);
+    const [count] = await sql`
+        select count(*)::int as member_count from xcalls_participants
+        where call_id = ${call.id} and state = 'joined'
+    `;
+    return { data: { xchat_get_call_pre_join_data: {
+        call: xcallResult(call),
+        member_count: count?.member_count ?? 0,
+        viewer_may_join: mayJoin,
+        auth_token: null,
+    } } };
+}
+
+async function joinXCall(v: Viewer, vars: Vars) {
+    if (v.status !== "active") throw new ChatError("Your account cannot join calls.");
+    const id = xcallId(vars);
+    const call = await getXCall(id);
+    if (!call || !["created", "active"].includes(call.status)) throw new ChatError("Call unavailable.");
+    await authorizeXCall(v, call);
+
+    if (call.call_type !== 1 && call.created_by !== v.id) {
+        const [participant] = await sql`
+            select state from xcalls_participants
+            where call_id = ${id} and user_id = ${v.id}::bigint
+        `;
+        if (!participant || !["invited", "joined"].includes(participant.state)) {
+            throw new ChatError("A join request or invitation is required.");
+        }
+    }
+
+    await sql.begin(async (tx) => {
+        await tx`
+            insert into xcalls_participants (call_id, user_id, state, role, joined_at)
+            values (${id}, ${v.id}::bigint, 'joined', 'participant', now())
+            on conflict (call_id, user_id) do update
+            set state = 'joined', joined_at = now(), left_at = null
+        `;
+        await tx`
+            update xcalls_calls set status = 'active', updated_at = now()
+            where id = ${id} and status in ('created', 'active')
+        `;
+        await tx`
+            insert into xcalls_events (call_id, actor_id, event_type)
+            values (${id}, ${v.id}::bigint, 'participant_joined')
+        `;
+    });
+
+    const updated = await getXCall(id);
+    return { data: { xchat_join_call: { call: updated ? xcallResult(updated) : null, media_session_id: null } } };
+}
+
+async function leaveXCall(v: Viewer, vars: Vars) {
+    const id = xcallId(vars);
+    const call = await getXCall(id);
+    if (!call) throw new ChatError("Call unavailable.");
+    await authorizeXCall(v, call);
+
+    await sql.begin(async (tx) => {
+        await tx`
+            update xcalls_participants set state = 'left', left_at = now()
+            where call_id = ${id} and user_id = ${v.id}::bigint and state = 'joined'
+        `;
+        await tx`
+            insert into xcalls_events (call_id, actor_id, event_type)
+            values (${id}, ${v.id}::bigint, 'participant_left')
+        `;
+
+        if (call.created_by === v.id) {
+            await tx`
+                update xcalls_calls set status = 'ended', ended_at = now(), updated_at = now()
+                where id = ${id} and status in ('created', 'active')
+            `;
+            await tx`
+                update xcalls_participants set state = 'left', left_at = coalesce(left_at, now())
+                where call_id = ${id} and state = 'joined'
+            `;
+            await tx`
+                insert into xcalls_events (call_id, actor_id, event_type)
+                values (${id}, ${v.id}::bigint, 'call_ended')
+            `;
+        } else {
+            await tx`
+                update xcalls_calls set status = 'ended', ended_at = now(), updated_at = now()
+                where id = ${id} and status = 'active'
+                  and not exists (
+                    select 1 from xcalls_participants
+                    where call_id = ${id} and state = 'joined'
+                  )
+            `;
+        }
+    });
+
+    return { data: { xchat_leave_call: { success: true } } };
+}
+
+async function requestJoinXCall(v: Viewer, vars: Vars) {
+    if (v.status !== "active") throw new ChatError("Your account cannot request to join calls.");
+    const id = xcallId(vars);
+    const call = await getXCall(id);
+    if (!call || !["created", "active"].includes(call.status)) throw new ChatError("Call unavailable.");
+    if (call.call_type !== 2) throw new ChatError("This call does not accept join requests.");
+    if (call.conversation_id) await authorized(v.id, call.conversation_id);
+
+    await sql.begin(async (tx) => {
+        await tx`
+            insert into xcalls_participants (call_id, user_id, state, role)
+            values (${id}, ${v.id}::bigint, 'requested', 'participant')
+            on conflict (call_id, user_id) do update
+            set state = case
+                when xcalls_participants.state = 'joined' then 'joined'
+                else 'requested'
+            end
+        `;
+        await tx`
+            insert into xcalls_events (call_id, actor_id, event_type)
+            values (${id}, ${v.id}::bigint, 'join_requested')
+        `;
+    });
+
+    return { data: { xchat_request_join_call: { success: true } } };
+}
+
 export const chatHandlers: Record<string, (viewer: Viewer, vars: Vars) => Promise<unknown> | unknown> = {
 	...media.handlers,
+        xCallsStartCall: startXCall,
+        xCallsGetCallPreJoinData: getXCallPreJoinData,
+        xCallsJoinCall: joinXCall,
+        xCallsLeaveCall: leaveXCall,
+        xCallsRequestJoinCall: requestJoinXCall,
 	GetConversationEntryDetailsQuery: async (v, vars) => {
 		await membership(v.id, String(vars.conversation_id));
 		return { data: { get_conversation_entry_details: { __typename: "XChatGetConversationEntryDetailsResponse", group_type: "Normal", read_only_reason: null } } };
