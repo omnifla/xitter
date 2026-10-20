@@ -620,11 +620,18 @@ async function createXCall(v: Viewer, vars: Vars) {
             `;
         });
     } catch (error) {
-        if ((error as { code?: string })?.code === "23505") {
+        const pgError = error as { code?: string; errno?: string; cause?: { code?: string; errno?: string } };
+        if (
+            pgError?.code === "23505" ||
+            pgError?.errno === "23505" ||
+            pgError?.cause?.code === "23505" ||
+            pgError?.cause?.errno === "23505"
+        ) {
             throw new ChatError("There is already an active call in this conversation.");
         }
         throw error;
     }
+
 
     const call = await getXCall(id);
     if (!call) throw new ChatError("Call could not be created.");
@@ -846,11 +853,22 @@ async function callingCall(call: XCallRow) {
 		call_id: call.id,
 		conversation_id: call.conversation_id,
 		host_user_id: call.created_by,
-		audio_only: !!call.metadata?.audio_only,
+		audio_only: !!xcallMetadata(call).audio_only,
 		created_at_ms: String(new Date(call.created_at).getTime()),
 		participants: rows.map((r: any) => ({ user_id: r.user_id, is_host: r.role === "host", joined_at_ms: r.joined_at_ms })),
 		p2p: XCALLS_P2P,
 	};
+}
+
+function xcallMetadata(call: XCallRow): Record<string, any> {
+    if (typeof call.metadata === "string") {
+        try {
+            return JSON.parse(call.metadata);
+        } catch {
+            return {};
+        }
+    }
+    return call.metadata ?? {};
 }
 
 function mediaCredentials(userId: string, call: XCallRow) {

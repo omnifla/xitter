@@ -51,9 +51,9 @@ try {
 	const start = started.items[0];
 	const call = start?.body?.x_chat_start_call_result?.call;
 	check("StartCall item is OK", start?.status === "OK" && start.index === 0);
-	check("call id is xxx-xxx-xxx", /^[a-z0-9]{3}-[a-z0-9]{3}-[a-z0-9]{3}$/.test(call?.call_id));
-	check("call carries conversation, host and audio_only", call.conversation_id === conversation && call.host_user_id === a.id && call.audio_only === true);
-	check("host is the only participant", call.participants.length === 1 && call.participants[0].is_host && call.participants[0].user_id === a.id);
+    check("call id is xxx-xxx-xxx", /^[a-z0-9]{3}-[a-z0-9]{3}-[a-z0-9]{3}$/.test(call?.call_id));
+    check("call carries conversation, host and audio_only", call.conversation_id === conversation && call.host_user_id === a.id && call.audio_only === true);
+    check("host is the only participant", call.participants.length === 1 && call.participants[0].is_host && call.participants[0].user_id === a.id);
 	check("call is p2p", call.p2p === true);
 	check("created_at_ms is a string of digits", /^\d{13}$/.test(call.created_at_ms));
 	const media = JSON.parse(start.body.x_chat_start_call_result.media_credentials.payload);
@@ -62,7 +62,7 @@ try {
 	const id = call.call_id;
 
 	const second = await batch(a, [calling("StartCall", { audio_only: true, conversation_id: conversation })]);
-	check("second live call in the conversation is refused", second.items[0].status === "FAILED_PRECONDITION");
+    check("second live call in the conversation is refused", second.items[0].status === "FAILED_PRECONDITION");
 	const refused = await batch(outsider, [calling("StartCall", { audio_only: true, conversation_id: conversation })]);
 	check("non-member cannot start a call there", refused.items[0].status === "FAILED_PRECONDITION");
 
