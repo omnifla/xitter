@@ -519,6 +519,8 @@ const ACTIONS: Record<string, Action> = {
 				await tx`delete from api_tokens where user_id = ${id}::bigint`;
 				await tx`update password_resets set used = true where user_id = ${id}::bigint and not used`;
 				await tx`delete from login_challenges where user_id = ${id}::bigint`;
+				await tx`delete from passkeys where user_id = ${id}::bigint`;
+				await tx`delete from passkey_challenges where user_id = ${id}::bigint`;
 				await tx`update email_confirmations set used = true where user_id = ${id}::bigint and not used`;
 			});
 			await audit(a, "reset_password", id);
