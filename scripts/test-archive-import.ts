@@ -175,6 +175,7 @@ try {
 	assert(!existsSync(orphan), "a zip nobody is importing is deleted");
 	console.log("archive import: all passed");
 } finally {
+	for (let i = 0; i < 300 && (await sql`select 1 from media where user_id = ${user}::bigint and state = 'processing'`).length; i++) await Bun.sleep(100);
 	await sql`delete from users where id = ${user}::bigint`;
 	await sql.close();
 	rmSync(scratch, { recursive: true, force: true });

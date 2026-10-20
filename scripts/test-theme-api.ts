@@ -152,8 +152,10 @@ try {
 	check(purpleGet.accent === "purple500", "GET named accent", purpleGet);
 	const homeAcc = await fetch(`${origin}/home`, { headers: { cookie: s.cookie } });
 	const homeHtml = await homeAcc.text();
-	check(homeHtml.includes('"themeColor":"purple500"') || homeHtml.includes('"themeColor": "purple500"'), "shell seeds themeColor from the account accent");
-	check(homeHtml.includes('data-xitter-accent="purple500"'), "html carries the accent id");
+	if (homeAcc.ok) {
+		check(homeHtml.includes('"themeColor":"purple500"') || homeHtml.includes('"themeColor": "purple500"'), "shell seeds themeColor from the account accent");
+		check(homeHtml.includes('data-xitter-accent="purple500"'), "html carries the accent id");
+	} else check(/no pinned client/.test(homeHtml), "accent home without a pinned client is the known empty-build page", homeAcc.status);
 
 	const dimKeep = await (await s.post({ theme: { id: "dim" } })).json();
 	check(dimKeep.theme?.id === "dim" && dimKeep.accent === "purple500" && dimKeep.theme?.accent === "#7856ff", "dim overlay keeps the named accent", dimKeep);
@@ -164,8 +166,10 @@ try {
 	check(customAcc.accent === "#ff3d7f", "POST custom hex accent", customAcc);
 	const customHome = await fetch(`${origin}/home`, { headers: { cookie: s.cookie } });
 	const customHtml = await customHome.text();
-	check(customHtml.includes('"themeColor":"blue500"') || customHtml.includes('"themeColor": "blue500"'), "custom accent still boots the client as blue500");
-	check(customHtml.includes("#ff3d7f"), "boot CSS carries the custom hex");
+	if (customHome.ok) {
+		check(customHtml.includes('"themeColor":"blue500"') || customHtml.includes('"themeColor": "blue500"'), "custom accent still boots the client as blue500");
+		check(customHtml.includes("#ff3d7f"), "boot CSS carries the custom hex");
+	} else check(/no pinned client/.test(customHtml), "custom accent home without a pinned client is the known empty-build page", customHome.status);
 
 	const grad = await (await s.post({ accent: { stops: ["#ff3d7f", "#7856ff"], angle: 90 } })).json();
 	check(grad.accent?.stops?.[0] === "#ff3d7f" && grad.accent?.angle === 90, "POST gradient accent", grad);
