@@ -4,13 +4,14 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { bioEntities, urlEntities as linkEntities } from "./links";
+import { conversationCardEntity, type ConversationCard } from "./conversation-cards";
 import type { User } from "./auth";
 import { CLIENT_DIR } from "./client-cache";
 import { PUBLIC_ORIGIN } from "./config";
 import type { ArticleEntity } from "./articles";
 import { FLAGS, flagList } from "./flags";
 import { homeOf, mentionsIn } from "./mentions";
-import { type MediaRow, absolute, mediaEntity } from "./media";
+import { type MediaRow, absolute, mediaEntity, mediaUrl, posterUrl } from "./media";
 import { placeById } from "./places";
 import { shownSource } from "./platforms";
 import { settings } from "./settings";
@@ -375,6 +376,9 @@ export type PostRow = {
 	staleEditOf?: string;
 	// the poll card this post carries, as pollCard builds it
 	poll?: Record<string, unknown>;
+	conversationCard?: ConversationCard | null;
+	conversationCardPostId?: string | null;
+	conversationCreative?: MediaRow;
 	linkCard?: Record<string, unknown>;
 	// the community this post belongs to, as communityObjects builds it
 	community?: Record<string, unknown>;
@@ -493,7 +497,9 @@ function plainTweet(p: PostRow, withTypename: boolean): Record<string, unknown> 
 	const mentions = allMentions.filter((m: any) => m.indices[1] <= textLength);
 	const tags = allTags.filter((t: any) => t.indices[1] <= textLength);
 	const urls = linkEntities(shown, textLength, p.localLinks);
-	const media = (p.media ?? []).map((m, i) => mediaEntity(m, p.id, p.author.screen_name, i, textLength));
+	const creative = p.conversationCreative ?? p.media?.[0];
+	const conversation = p.conversationCard && creative ? conversationCardEntity(p.conversationCard, p.conversationCardPostId ?? p.id, { kind: creative.kind, url: mediaUrl(creative.id, creative.mime), width: creative.width, height: creative.height, poster: posterUrl(creative.id), stream: `${PUBLIC_ORIGIN}/media/card-video/${creative.id}.xml`, duration: creative.duration_ms }) : undefined;
+	const media = (conversation ? [] : p.media ?? []).map((m, i) => mediaEntity(m, p.id, p.author.screen_name, i, textLength));
 	const quoteLink = p.quoted && permalink(p.quoted);
 	return {
 		...(withTypename ? { __typename: "Tweet" } : {}),
@@ -507,7 +513,8 @@ function plainTweet(p: PostRow, withTypename: boolean): Record<string, unknown> 
 		...(p.quoted ? { quoted_status_result: { result: tweetResult(p.quoted) } } : {}),
 		...(p.article ? { article: { article_results: { result: p.article } } } : {}),
 		...(p.community ? { community_results: { result: p.community } } : {}),
-		...(p.poll ? { card: p.poll } : p.linkCard ? { card: p.linkCard } : {}),
+		...(p.conversationCard ? { xitter_conversation_card: p.conversationCard } : {}),
+		...(conversation ? { card: conversation } : p.poll ? { card: p.poll } : p.linkCard ? { card: p.linkCard } : {}),
 		...(long ? { note_tweet: { is_expandable: true, note_tweet_results: { result: {
 			id: globalId("NoteTweet", p.id),
 			text: p.text,

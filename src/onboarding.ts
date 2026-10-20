@@ -12,6 +12,7 @@
 // The first screen is the signed-in client's own sign-in dialog.
 
 import { signInCookies } from "./accounts";
+import { loadLook, nightModeCookies } from "./themes/api";
 import { login, startSession } from "./auth";
 import { answerChallenge, startChallenge } from "./two-factor";
 import { sql } from "./db";
@@ -26,7 +27,16 @@ import { settings } from "./settings";
 import { hit, used } from "./ratelimit";
 import { requestCountry, requestIp } from "./login-history";
 
-const load = async (name: string): Promise<Message[]> => fromJson(await Bun.file(new URL(`./jf/${name}.json`, import.meta.url)).json());
+async function appendSignIn(headers: Headers, req: Request, session: { token: string; csrf: string; userId: string }) {
+	for (const c of await signInCookies(req, session)) headers.append("set-cookie", c);
+	for (const c of nightModeCookies(await loadLook(session.userId))) headers.append("set-cookie", c);
+}
+
+// X's name field drops everything outside a-z, 0-9 and a few marks as it is
+// typed; staff-set handles can hold any symbol, so let it all through
+const X_NAME_PATTERN = "^[a-zA-Z0-9@._+\\-]+$";
+const load = async (name: string): Promise<Message[]> =>
+	mapStrings(fromJson(await Bun.file(new URL(`./jf/${name}.json`, import.meta.url)).json()), (s) => (s === X_NAME_PATTERN ? "^\\S+$" : s));
 // Takes out of a screen the parts that hold any of these texts. With `part` (a
 // button is 7140) the nearest element of that type goes; otherwise the branch
 // that sits beside the username field, i.e. the child of the nearest element
@@ -152,6 +162,17 @@ const TEXTS: Record<string, () => string> = {
 	"Choose a name, username, and password.": () => `Welcome to ${settings().instance_name}. Choose a name, username, and password.`,
 };
 
+// Sign-in by email as well as by handle: staff can give an account a handle
+// with characters the dialog's field won't take. One local account per
+// address, or none.
+async function byEmail(typed: string): Promise<string | undefined> {
+	if (!typed.includes("@")) return undefined;
+	const [taken] = await sql`select 1 from users where lower(screen_name) = lower(${typed}) and instance is null`;
+	if (taken) return undefined;
+	const rows = await sql`select screen_name from users where lower(email) = lower(${typed}) and instance is null and status <> 'suspended' limit 2`;
+	return rows.length === 1 ? rows[0].screen_name : undefined;
+}
+
 // sign-up's emailed code, on the same six-box screen
 const emailCodeTexts = (email: string): Record<string, string> => ({
 	"We sent you a security code": "We sent you a code",
@@ -247,6 +268,8 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 		const name = String(f.username_or_email ?? "").trim().replace(/^@/, "");
 		const [user] = name ? await sql`select screen_name from users where lower(screen_name) = lower(${name}) and instance is null and status <> 'suspended'` : [];
 		if (user) return respond(signInScreen(user.screen_name));
+		// the password screen keeps the address: its field may not hold the handle
+		if ((await byEmail(name)) !== undefined) return respond(signInScreen(name));
 		const mode = settings().signup_mode;
 		if (mode === "closed") return respond(fieldError("username_or_email", "No account goes by that name."));
 		const problem = usernameProblem(name);
@@ -269,7 +292,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 			const session = answered.session;
 			const [user] = await sql`select screen_name from users where id = ${session.userId}::bigint`;
 			const headers = new Headers();
-			for (const c of await signInCookies(req, session)) headers.append("set-cookie", c);
+			await appendSignIn(headers, req, session);
 			return respond(fill(templates.success, { user_id: session.userId, username: user.screen_name }), false, headers);
 		}
 		const s = await pending(token);
@@ -290,7 +313,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 			await sql`delete from signup_sessions where token = ${token}::uuid`;
 			const session = await startSession(userId);
 			const headers = new Headers();
-			for (const c of await signInCookies(req, session)) headers.append("set-cookie", c);
+			await appendSignIn(headers, req, session);
 			headers.append("set-cookie", "xitter_invite=; Path=/; Max-Age=0");
 			return respond(fill(templates.success, { user_id: userId, username: p.screenName }), false, headers);
 		}
@@ -344,7 +367,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 		await sql`delete from signup_sessions where token = ${token}::uuid`;
 		const session = await login(String(f.username ?? s.username), String(f.password ?? ""));
 		const headers = new Headers();
-		for (const c of await signInCookies(req, session!)) headers.append("set-cookie", c);
+		await appendSignIn(headers, req, session!);
 		headers.append("set-cookie", "xitter_invite=; Path=/; Max-Age=0");
 		return respond(fill(templates.success, { user_id: session!.userId, username: String(f.username ?? s.username) }), false, headers);
 	}
@@ -356,7 +379,8 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 	}
 	if (path === "/onboarding/web/actions/login_enter_password") {
 		const f = await form(req);
-		const username = String(f.username ?? "").trim().replace(/^@/, "");
+		const typed = String(f.username ?? "").trim().replace(/^@/, "");
+		const username = (await byEmail(typed)) ?? typed;
 		// guessing one account's password from many addresses still runs out;
 		// only wrong passwords count, so signing in on several devices doesn't
 		const account = username.toLowerCase();
@@ -370,7 +394,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 		}
 		const [user] = await sql`select screen_name from users where id = ${session.userId}::bigint`;
 		const headers = new Headers();
-		for (const c of await signInCookies(req, session)) headers.append("set-cookie", c);
+		await appendSignIn(headers, req, session);
 		return respond(fill(templates.success, { user_id: session.userId, username: user.screen_name }), false, headers);
 	}
 	return undefined;

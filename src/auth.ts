@@ -44,6 +44,8 @@ export type User = {
 	// posts only for approved followers
 	protected?: boolean;
 	language?: string;
+	// two-letter code: detected at sign-in, or picked in Settings > Country
+	country?: string | null;
 	// the instance the account lives on; null for this one
 	instance?: string | null;
 	created_at: Date;
@@ -153,7 +155,7 @@ export function parseCookies(req: Request): Record<string, string> {
 
 import { requestCountry } from "./login-history";
 
-const viewerCols = () => sql`u.id, u.screen_name, u.name, u.bio, u.location, u.website, u.avatar_url, u.banner_url, u.verified_type, u.flag, u.status, u.role, u.protected, u.language, u.created_at, u.instance,
+const viewerCols = () => sql`u.id, u.screen_name, u.name, u.bio, u.location, u.website, u.avatar_url, u.banner_url, u.verified_type, u.flag, u.status, u.role, u.protected, u.language, u.country, u.created_at, u.instance,
 	u.preferences->>'discoverable_by_email' = 'true' as discoverable_by_email,
 	(select coalesce(json_agg(json_build_object('id', b.id::text, 'name', b.name) order by ub.position, b.name), '[]')
 		from user_badges ub join custom_badges b on b.id = ub.badge_id where ub.user_id = u.id) as badges`;
@@ -191,12 +193,16 @@ export function getViewer(req: Request): Promise<Viewer | undefined> {
 	return loading;
 }
 
+export function csrfCookie(csrf: string): string {
+	return `ct0=${csrf}; Path=/; Max-Age=${YEAR}; SameSite=Lax${SECURE}`;
+}
+
 export function sessionCookies(s: { token: string; csrf: string; userId: string }): string[] {
 	const base = `Path=/; Max-Age=${YEAR}; SameSite=Lax${SECURE}`;
 	return [
 		`auth_token=${s.token}; HttpOnly; ${base}`,
 		// the client reads these two itself
-		`ct0=${s.csrf}; ${base}`,
+		csrfCookie(s.csrf),
 		`twid=u%3D${s.userId}; ${base}`,
 	];
 }

@@ -1440,8 +1440,35 @@ end $$;
 drop trigger if exists users_admins_unblocked on users;
 create trigger users_admins_unblocked after update of role on users for each row execute function admins_unblocked();
 delete from blocks bl using users b, users t where b.id = bl.blocker_id and t.id = bl.blocked_id and b.instance is null and t.role = 'admin' and t.instance is null;
+
+-- Imports of X archives (archive-import.ts): one per account, the latest. The
+-- zip waits in ARCHIVE_DIR while it uploads and imports, and goes when done.
+create table if not exists archive_imports (
+	user_id bigint primary key references users (id) on delete cascade,
+	state text not null check (state in ('uploading', 'queued', 'running', 'done', 'failed')),
+	size bigint not null default 0,
+	options jsonb not null default '{}',
+	total int not null default 0,
+	posts int not null default 0,
+	media int not null default 0,
+	skipped int not null default 0,
+	error text,
+	updated_at timestamptz not null default now()
+);
+-- posts the instance's rules left out, and when a paused import (the post
+-- rate limit) carries on
+alter table archive_imports add column if not exists refused int not null default 0;
+alter table archive_imports add column if not exists waiting_until timestamptz;
+-- 'pending': waiting for staff to approve it (Admin > Settings, Import from X)
+alter table archive_imports drop constraint if exists archive_imports_state_check;
+alter table archive_imports add constraint archive_imports_state_check check (state in ('uploading', 'pending', 'queued', 'running', 'done', 'failed'));
+
 -- profile decor for gold-check accounts, from the Steam Points Shop (decor.ts)
 alter table users add column if not exists decor jsonb;
+
+alter table posts add column if not exists conversation_card jsonb;
+
+alter table posts add column if not exists conversation_card_post_id bigint references posts (id) on delete set null;
 
 create table if not exists xcalls_calls (
     id text primary key,

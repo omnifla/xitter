@@ -1,4 +1,4 @@
-import { type Viewer, getViewer, parseCookies } from "./auth";
+import { type Viewer, getViewer, parseCookies, csrfCookie } from "./auth";
 import { getClientFile, getClientFilePath } from "./client-cache";
 import { PORT, PUBLIC_ORIGIN } from "./config";
 import { migrate, sql } from "./db";
@@ -42,6 +42,7 @@ import { bucketsFor, hit, isMutation, limitApi, limitedResponse } from "./rateli
 import { actingViewer, delegateMay } from "./delegation";
 import { automationRoute } from "./automation";
 import { instancesRoute } from "./federation-settings";
+import { importRoute, resumeImports } from "./archive-import";
 import { stickerImage, stickerPacks } from "./stickers";
 import { apiTokensRoute, publicApi } from "./public-api";
 import { connectedAppsRoute, developerAppsRoute, oauthAuthorize, oauthToken } from "./oauth";
@@ -54,6 +55,11 @@ import { emailRoute } from "./email-address";
 import { embedImage, linkPreview, oembed } from "./embeds";
 import { noteAppealsRoute } from "./note-appeals";
 import { decorCatalog, decorFor, decorRoute, decorShop, steamFile } from "./decor";
+import { nightModeCookies, themeApi, themeExport, themeImport } from "./themes/api";
+import { resolveBackground } from "./themes/css";
+import { themeRoute } from "./themes/page";
+import { readPrefs } from "./themes/validate";
+import { serveFont } from "./fonts";
 
 const MIME: Record<string, string> = {
 	js: "text/javascript; charset=utf-8",
@@ -71,7 +77,7 @@ const MIME: Record<string, string> = {
 // dev mode it calls the bare paths.
 // The client also calls outside services on its own (grok.com checkout, ads
 // measurement). Requests from the page may only reach this instance.
-const PAGE_CSP = "connect-src 'self' blob: data:";
+const PAGE_CSP = "connect-src 'self' blob: data:; font-src 'self'";
 
 // the instance's own files (logo, icons), open to everyone since the sign-in page uses them
 const PUBLIC_DIR = process.env.PUBLIC_DIR ?? "public";
@@ -99,7 +105,7 @@ async function servePublic(p: string): Promise<Response> {
 	return new Response(file, { headers: { "cache-control": "no-cache" } });
 }
 
-const API_PREFIX = /^\/(i\/api\/|i\/jfapi\/|i\/media\/|1\.1\/|2\/|graphql\/|fleets\/|live_pipeline\/)/;
+const API_PREFIX = /^\/(i\/api\/|i\/jfapi\/|i\/media\/|1\.1\/|2\/|v2\/|graphql\/|fleets\/|live_pipeline\/)/;
 // calls no handler exists for yet, most frequent first
 const unknown = new Map<string, number>();
 const MAX_UNKNOWN_PATHS = 1000;
@@ -189,6 +195,7 @@ async function serveApi(req: Request, url: URL, viewer: Viewer | undefined): Pro
 	const parts = path.split("/").filter(Boolean);
 	const gql = parts.indexOf("graphql");
 	const operation = gql >= 0 ? parts[parts.length - 1] : undefined;
+	if (req.method === "POST" && path === "/1.1/graphql/app_context.json") return new Response(null, { status: 204 });
 	if ((req.method !== "GET" || operation) && req.headers.get("x-csrf-token") !== viewer.csrf)
 		return apiError(403, 353, "This request requires a matching csrf cookie and header.");
 	if (req.method === "GET" && operation && isMutation(operation)) return apiError(405, 144, "Use POST for this operation.");
@@ -210,6 +217,9 @@ async function serveApi(req: Request, url: URL, viewer: Viewer | undefined): Pro
 	if (path === "/xitter/decor") return decorFor(url);
 	if (path === "/xitter/decor/shop") return decorShop(url);
 	if (path === "/xitter/decor/catalog") return decorCatalog();
+	if (path === "/xitter/theme/import") return themeImport(req, viewer);
+	if (path === "/xitter/theme/export") return themeExport(req, viewer);
+	if (path === "/xitter/theme") return themeApi(req, viewer);
 	if (path === "/xitter/gif") return gifProxy(url);
 	if (path === "/xitter/stickers") return Response.json(await stickerPacks());
 	if (path === "/xitter/client_error" && req.method === "POST") return clientError(req, viewer);
@@ -267,6 +277,7 @@ setInterval(
 ).unref();
 await loadSettings();
 await resumeVideos(MEDIA_DIR);
+await resumeImports();
 
 // a request that throws is answered by Bun's error() below, which doesn't know
 // the request; caught here it is logged with its path and account
@@ -284,8 +295,23 @@ async function route(req: Request): Promise<Response | undefined> {
 	rememberIp(req, server.requestIP(req)?.address);
 	const url = new URL(req.url);
 	const p = url.pathname;
+	// for Docker's health check (Dockerfile): the server answers and reaches its database
+	if (p === "/healthz") {
+		const db = await Promise.race([sql`select 1`.then(() => true, () => false), Bun.sleep(3000).then(() => false)]);
+		return new Response(db ? "ok" : "database unreachable", { status: db ? 200 : 503, headers: { "cache-control": "no-store" } });
+	}
 	if (p === "/federation/superadmin/accept") return acceptTicket(req, requestIp(req) ?? "unknown");
+	// /i/xitter/* holds Xitter's own static files, served before sign-in and
+	// rate limits: avatar decoration images and the locally cached Google Fonts.
+	// Everything else under this prefix 404s on purpose. Without that line an
+	// unknown or missing file here (a font that failed to download, a stale
+	// decoration link) would fall through to the client shell and come back as
+	// a 200 HTML page, which the browser then tries to use as a font or image.
+	// A new route under /i/xitter/ must go ABOVE the catch-all, or it is never
+	// reached. JSON endpoints belong under /i/api/xitter/ instead (serveApi).
 	if (p.startsWith("/i/xitter/decoration/")) return (await decorationFile(url)) ?? new Response("not found", { status: 404 });
+	if (p.startsWith("/i/xitter/fonts/")) return serveFont(url, url.searchParams.has("family") && !!(await getViewer(req)));
+	if (p.startsWith("/i/xitter/")) return new Response("not found", { status: 404 });
 	if (req.method !== "GET" && req.method !== "HEAD" && req.headers.has("cookie")) {
 		const site = req.headers.get("sec-fetch-site");
 		const origin = req.headers.get("origin");
@@ -397,9 +423,11 @@ async function route(req: Request): Promise<Response | undefined> {
 	if (p === "/account/notes/appeals" && viewer) return noteAppealsRoute(req, viewer);
 	if (p === "/account/automation" && viewer) return automationRoute(req, viewer);
 	if (p === "/account/instances" && viewer) return instancesRoute(req, viewer);
+	if ((p === "/account/import" || p === "/account/import/upload") && viewer) return importRoute(req, url, viewer);
 	if (p === "/account/decoration" && viewer) return decorationRoute(req, viewer);
 	if (p === "/account/organisation" && viewer) return orgRoute(req, viewer);
 	if (p === "/account/decor" && viewer) return decorRoute(req, viewer);
+	if (p === "/account/theme" && viewer) return themeRoute(req, viewer);
 	if (p.startsWith("/i/ton/data/xchat_media/")) return chatMediaRoute(req, viewer, url);
 	// pictures and oEmbed for previews of public posts in other apps (embeds.ts)
 	if (p.startsWith("/embed/")) return embedImage(p);
@@ -441,16 +469,22 @@ async function route(req: Request): Promise<Response | undefined> {
 	const [communityRows, flagRows, links] = viewer
 		? await Promise.all([
 			sql`select 1 from community_members where user_id = ${viewer.id}::bigint limit 1`,
-			sql`select education_flags from users where id = ${viewer.id}::bigint`,
+			sql`select education_flags, preferences from users where id = ${viewer.id}::bigint`,
 			menuLinks(viewer.id),
 		])
 		: [[], [], []];
-	const page = shell(viewer ?? null, !!parseCookies(req).auth_multi, communityRows.length > 0, flagRows[0]?.education_flags ?? {}, links);
-	if (!page) return new Response("no pinned client build: run scripts/fetch-client.ts --token or --har", { status: 500 });
+	const prefs = readPrefs(flagRows[0]?.preferences);
+	const look = prefs.look;
+	const painted = look?.kind === "painted" ? look.theme : null;
+	const paint = viewer && painted ? await resolveBackground(viewer.id, painted) : undefined;
+	const page = shell(viewer ?? null, !!parseCookies(req).auth_multi, communityRows.length > 0, flagRows[0]?.education_flags ?? {}, links, look, prefs.accent, paint, viewer?.csrf);
 	const headers = new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": PAGE_CSP });
 	// a guest token left from the signed-out page makes the signed-in client act
 	// as a guest (no csrf header, every write refused)
 	if (viewer && /(?:^|;\s*)gt=/.test(req.headers.get("cookie") ?? "")) headers.append("set-cookie", "gt=; Path=/; Max-Age=0");
+	if (viewer && parseCookies(req).ct0 !== viewer.csrf) headers.append("set-cookie", csrfCookie(viewer.csrf));
+	for (const c of nightModeCookies(look)) headers.append("set-cookie", c);
+	if (!page) return new Response("no pinned client build: run scripts/fetch-client.ts --token or --har", { status: 500, headers });
 	return new Response(page, { headers });
 }
 

@@ -25,6 +25,7 @@ export const FEATURES = {
 	business: "Business sign-up",
 	notes_everyone: "Anyone can write Community Notes (off: only accounts given access on their admin page)",
 	link_previews: "Previews of public posts and profiles when their links are shared in other apps",
+	archive_import: "Import from X: accounts upload their X archive and its posts come over (Settings > Your account)",
 } as const;
 export type Feature = keyof typeof FEATURES;
 
@@ -48,6 +49,7 @@ const DEFAULTS = {
 		business: false,
 		notes_everyone: true,
 		link_previews: true,
+		archive_import: false,
 	} as Record<Feature, boolean>,
 	limits: { image_mb: 5, video_mb: Number(process.env.MAX_VIDEO_MB ?? 200), video_seconds: Number(process.env.MAX_VIDEO_SECONDS ?? 600) },
 	// per account per 15 minutes (ratelimit.ts); sign-in and mail limits are fixed
@@ -84,6 +86,8 @@ const DEFAULTS = {
 	backups: { daily: false, keep: 7 },
 	// member-invites.ts: invites members make themselves, while sign-up is by invite
 	invite_quota: { enabled: false, per_month: 3, uses: 1, min_age_days: 7 },
+	// archive-import.ts: who may import from X, while the feature is on; staff skip both
+	archive_import: { min_age_days: 7, approval: true },
 	// the client's own feature switches, set by an admin (Admin > Feature
 	// switches); they win over the build's values and Xitter's own (shell.ts)
 	switch_overrides: {} as Record<string, unknown>,

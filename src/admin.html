@@ -1033,6 +1033,12 @@ const RENDER = {
 			'<div class="field"><label>Steps, one per strike: 0 is a warning, a number is hours suspended, -1 is permanent</label><input id="amLadder" value="' + esc(am.ladder.join(", ")) + '"' + dis + "></div>" +
 			'<div class="field"><label>Second chances a week: refused content that doesn\'t count as a strike, 0 for none</label><input id="amChances" type="number" min="0" max="100" value="' + esc(am.second_chances ?? 5) + '"' + dis + "></div>" +
 			(admin ? '<button class="btn primary" id="saveAutomod">Save</button>' : "") + "</div>" +
+			'<div class="box"><h2>Import from X</h2><p class="dim small">While the Import from X feature is on, who may bring their posts over from an X archive. Staff accounts skip both. An import waiting for approval is deleted after a week.</p>' +
+			'<div class="field"><label>From account age (days, 0 for any)</label><input id="aiDays" type="number" min="0" max="3650" value="' + esc(String(s.archive_import.min_age_days)) + '"' + dis + "></div>" +
+			'<label class="row" style="margin:6px 0"><input type="checkbox" id="aiApproval"' + (s.archive_import.approval ? " checked" : "") + dis + "> Staff approve each import before it starts</label>" +
+			(admin ? '<button class="btn primary" id="saveArchiveImport">Save</button>' : "") +
+			(can("archiveImports") ? '<h2 class="small" style="margin-top:16px">Waiting for approval</h2><div id="aiPending" class="dim small">Loading…</div>' : "") + "</div>" +
+
 			'<div class="box"><h2>Trends</h2><div class="field"><label>Hidden hashtags, one per line</label><textarea id="hiddenTrends"' + dis + ">" + esc(o.hidden_trends.map((t) => "#" + t).join("\n")) + "</textarea></div>" +
 			'<div class="field"><label>Promoted hashtags, shown first</label><textarea id="promotedTrends"' + dis + ">" + esc(o.promoted_trends.map((t) => "#" + t).join("\n")) + "</textarea></div>" +
 			'<div class="row"><div class="field"><label>People needed before a hashtag trends</label><input id="trendPeople" type="number" min="1" max="1000" value="' + esc(String(o.trend_min_people ?? 3)) + '"' + dis + "></div>" +
@@ -1053,6 +1059,20 @@ const RENDER = {
 
 		const save = (body, done) => act(() => api("saveSettings", body), done).then(route);
 		main.querySelectorAll("[name=mode]").forEach((r) => r.onchange = () => act(() => api("setSignupMode", { mode: r.value }), "Sign-up mode saved"));
+		if ($("#aiPending")) api("archiveImports").then(({ imports }) => {
+			const box = $("#aiPending");
+			if (!imports.length) { box.textContent = "None."; return; }
+			box.className = "";
+			box.innerHTML = imports.map((i) => '<div class="row" style="margin:6px 0;justify-content:space-between"><span><a href="#user/' + esc(i.user_id) + '">@' + esc(i.screen_name) + "</a> " +
+				'<span class="dim small">joined ' + esc(when(i.created_at)) + ", " + Math.max(1, Math.round(i.size / 1048576)) + " MB" + (i.options.replies ? ", with replies" : "") + (i.options.profile ? ", with profile" : "") + ", asked " + esc(when(i.updated_at)) + "</span></span>" +
+				'<span class="row"><button class="btn primary" data-ai-approve="' + esc(i.user_id) + '">Approve</button><button class="btn danger" data-ai-decline="' + esc(i.user_id) + '">Decline</button></span></div>').join("");
+			box.querySelectorAll("[data-ai-approve]").forEach((b) => b.onclick = () => act(() => api("decideArchiveImport", { userId: b.dataset.aiApprove, approve: true }), "Approved; the import starts").then(route));
+			box.querySelectorAll("[data-ai-decline]").forEach((b) => b.onclick = () => {
+				const reason = prompt("Why? The account sees this (optional).");
+				if (reason === null) return;
+				act(() => api("decideArchiveImport", { userId: b.dataset.aiDecline, approve: false, reason }), "Declined; the archive was deleted").then(route);
+			});
+		}, () => { $("#aiPending").textContent = "Couldn't load the imports."; });
 		if (!admin) return;
 		$("#saveFollows").onclick = () => save({ default_follows: $("#follows").value.split(",").map((x) => x.trim()).filter(Boolean) }, "Saved");
 		$("#saveName").onclick = () => save({ instance_name: $("#name").value, source_url: $("#source").value }, "Saved");
@@ -1091,6 +1111,7 @@ const RENDER = {
 				act(() => api("blockedNameAccounts", { suspend: true }), "Suspended").then(route);
 			};
 		});
+		if ($("#saveArchiveImport")) $("#saveArchiveImport").onclick = () => act(() => api("saveArchiveImport", { min_age_days: Number($("#aiDays").value), approval: $("#aiApproval").checked }), "Saved").then(route);
 		if ($("#saveAutomod")) $("#saveAutomod").onclick = () => act(() => api("saveAutomod", { enabled: $("#amOn").checked, strike_days: Number($("#amDays").value), ladder: $("#amLadder").value.split(",").map((x) => Number(x.trim())), second_chances: Number($("#amChances").value) }), "Automod saved").then(route);
 		main.querySelectorAll("[data-save-ops]").forEach((b) => b.onclick = () => act(() => api("saveOperations", {
 			maintenance: $("#maint").checked,
@@ -1226,6 +1247,7 @@ async function renderUser(main, id) {
 			.map(([k, l, v]) => '<div class="field"><label>' + l + '</label><input data-f="' + k + '" value="' + esc(v) + '"' + (canHere("updateUser") ? "" : " disabled") + "></div>").join("") +
 		'<div class="field"><label>Bio</label><textarea data-f="bio"' + (canHere("updateUser") ? "" : " disabled") + ">" + esc(u.bio) + "</textarea></div>" +
 		'<div class="field"><label>Account based in (About this account; blank shows the detected region' + (u.country ? ", " + esc(u.country) : "") + ')</label><input data-f="based_in" maxlength="50" value="' + esc(u.based_in_override ?? "") + '"' + (canHere("updateUser") ? "" : " disabled") + "></div>" +
+		'<div class="field"><label>Joined from (after the date joined in About this account; a country or its code, like SE; blank hides it)</label><input data-f="joined_from" maxlength="60" value="' + esc(u.joined_from ?? "") + '"' + (canHere("updateUser") ? "" : " disabled") + "></div>" +
 		(canHere("updateUser") ? '<button class="btn primary" id="save">Save profile</button>' : "") +
 		(canHere("setUserCounts") ? '<h2 style="margin-top:20px">Shown counts</h2><p class="dim small">Blank shows the real number. Only the number on the profile changes, not the lists.</p><div class="row">' +
 			["followers", "following"].map((k) => '<label class="small" style="flex:1">' + k + '<input data-count="' + k + '" type="number" min="0" value="' + ((u.count_overrides || {})[k] ?? "") + '"></label>').join("") +
@@ -1262,7 +1284,8 @@ async function renderUser(main, id) {
 			.map(([s, l, t]) => '<button class="btn' + (s === "suspended" ? " danger" : "") + '" data-status="' + s + '" title="' + esc(t) + '"' + (u.status === s || !can("setStatus") || self ? " disabled" : "") + ">" + l + "</button>").join("") +
 		'</div><p class="dim small">Restrict: can read, can\'t post. Limit: only followers see their posts. Suspend: signed out and hidden everywhere.</p></div>' +
 		// access
-		'<div class="box"><h2>Access</h2><div class="row">' + (canHere("resetPassword") ? '<button class="btn" id="reset">Reset password</button>' : "") + (canHere("signOut") ? '<button class="btn" id="signout">Sign out everywhere</button>' : "") + '</div><div id="secret"></div>' +
+		'<div class="box"><h2>Access</h2><div class="row">' + (canHere("resetPassword") ? '<button class="btn" id="reset">Reset password</button>' : "") + (canHere("signOut") ? '<button class="btn" id="signout">Sign out everywhere</button>' : "") +
+			(canHere("revokeApiTokens") ? '<button class="btn danger" id="revoketokens"' + (u.api_tokens ? "" : " disabled") + ">Revoke API tokens (" + u.api_tokens + ")</button>" : "") + '</div><div id="secret"></div>' +
 		'<label class="row" style="margin-top:14px"><input type="checkbox" id="notes-access"' + (u.notes_writer ? " checked" : "") + (canHere("setNotesAccess") ? "" : " disabled") + '>Community Notes writing access</label>' +
 		'<label class="row" style="margin-top:8px"><input type="checkbox" id="never-sensitive"' + (u.never_sensitive ? " checked" : "") + (can("setNeverSensitive") ? "" : " disabled") + '>Never mark their posts as sensitive</label>' +
 		(canHere("admin") ? '<div class="field" style="margin-top:14px"><label>Staff role</label><select id="role"><option value="">none</option>' + ["support", "moderator", "admin"].map((r) => '<option' + (u.role === r ? " selected" : "") + ">" + r + "</option>").join("") + "</select></div>" : "") +
@@ -1323,6 +1346,10 @@ async function renderUser(main, id) {
 		});
 	};
 	if ($("#signout")) $("#signout").onclick = () => act(() => api("signOut", { id }), "Signed out").then(again);
+	if ($("#revoketokens")) $("#revoketokens").onclick = async () => {
+		if (!(await ask("Revoke all of @" + u.screen_name + "'s API tokens? Their scripts, bots and connected apps stop working."))) return;
+		act(() => api("revokeApiTokens", { id }), "API tokens revoked").then(again);
+	};
 	if ($("#role")) $("#role").onchange = () => act(() => api("setRole", { id, role: $("#role").value }), "Role set").then(again);
 	if (can("setNeverSensitive")) $("#never-sensitive").onchange = () => act(() => api("setNeverSensitive", { id, enabled: $("#never-sensitive").checked }), "Sensitive marking updated").then(again);
 	if (canHere("setNotesAccess")) $("#notes-access").onchange = () => act(() => api("setNotesAccess", { id, enabled: $("#notes-access").checked }), "Notes access updated").then(again);

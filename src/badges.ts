@@ -341,7 +341,7 @@ export const BADGES_SCRIPT = String.raw`(function(){
 	function openCard(id,at){
 		closeCard();
 		var light=/^rgb\(255, 255, 255/.test(getComputedStyle(document.body).backgroundColor);
-		var fg=light?"#0f1419":"#e7e9ea",muted=light?"#536471":"#71767b",accent="#1d9bf0";
+		var fg=light?"#0f1419":"#e7e9ea",muted=light?"#536471":"#71767b",accent=getComputedStyle(document.documentElement).getPropertyValue("--xt-accent").trim()||"#1d9bf0";
 		card=el("div","position:fixed;z-index:10000;width:280px;max-width:calc(100vw - 32px);padding:16px;border-radius:16px;font:15px/20px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"+
 			"background:"+(light?"#fff":"#000")+";color:"+fg+";box-shadow:"+(light?"rgba(101,119,134,.2) 0 0 15px, rgba(101,119,134,.15) 0 0 3px 1px":"rgba(255,255,255,.2) 0 0 15px, rgba(255,255,255,.15) 0 0 3px 1px"));
 		card.setAttribute("role","dialog");

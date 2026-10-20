@@ -147,7 +147,17 @@ export async function setProtected(userId: string, on: boolean): Promise<void> {
 
 // accounts `userId` follows, or accounts following `userId`
 // verified_followers: followers with any check, for the Verified Followers tab
-export async function followList(viewerId: string, userId: string, kind: "following" | "followers" | "verified_followers", limit = 200): Promise<User[]> {
+// "Followers you know": the account's followers that the viewer follows too
+const knownFollowers = (viewerId: string, userId: string) => sql`from follows f join users u on u.id = f.follower_id
+	where f.followee_id = ${userId}::bigint and u.id <> ${viewerId}::bigint and u.id not in ${outOfView(viewerId)}
+	and exists (select 1 from follows k where k.follower_id = ${viewerId}::bigint and k.followee_id = u.id)`;
+
+export async function knownFollowerCount(viewerId: string, userId: string): Promise<number> {
+	const [r] = await sql`select count(*)::int as n ${knownFollowers(viewerId, userId)}`;
+	return r?.n ?? 0;
+}
+
+export async function followList(viewerId: string, userId: string, kind: "following" | "followers" | "verified_followers" | "known_followers", limit = 200): Promise<User[]> {
 	// a protected account's lists are for itself and its followers
 	if (userId !== viewerId) {
 		const [hidden] = await sql`select 1 from users u where u.id = ${userId}::bigint and not ${staffViewer(viewerId)} and (
@@ -156,7 +166,9 @@ export async function followList(viewerId: string, userId: string, kind: "follow
 		if (hidden) return [];
 	}
 	const rows =
-		kind === "following"
+		kind === "known_followers"
+			? await sql`select ${userCols(viewerId)} ${knownFollowers(viewerId, userId)} order by f.created_at desc limit ${limit}`
+			: kind === "following"
 			? await sql`select ${userCols(viewerId)} from follows f join users u on u.id = f.followee_id
 				where f.follower_id = ${userId}::bigint and u.id not in ${outOfView(viewerId)} order by f.created_at desc limit ${limit}`
 			: await sql`select ${userCols(viewerId)} from follows f join users u on u.id = f.follower_id

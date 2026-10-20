@@ -1,6 +1,6 @@
 {
 	"version": 1,
-	"sequence": 12,
+	"sequence": 13,
 	"instances": [
 		{
 			"id": "giggleshitter.gay",
@@ -42,6 +42,13 @@
 			"name": "Xitter",
 			"source_url": "https://github.com/Xittered/xitter",
 			"public_key": "swH4RzAMdz0qh_yPtNxYG4yJnWAPTgvXyeGjZ8rVGdI",
+			"state": "active"
+		},
+		{
+			"id": "x12.area12.lol",
+			"name": "X12",
+			"source_url": null,
+			"public_key": "BxDn6ty57Wbfp6R8fEk8cGxO8ucUDNfGDiDanyIvUs8",
 			"state": "active"
 		},
 		{

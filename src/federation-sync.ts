@@ -7,7 +7,7 @@ import { badgesOf } from "./users";
 import { FederationError, INSTANCE_ID, type Incoming, isBlocked, isPeer, peers, signedAnswer, signedFetch, signedRawAnswer } from "./federation";
 import { newId } from "./ids";
 import { replyLimited } from "./blocks";
-import { STAFF_HANDLE } from "./invites";
+import { STAFF_HANDLE, STRICT_HANDLE } from "./invites";
 import { saveMentions } from "./mentions";
 import { cleanText, oneLine } from "./text-clean";
 import { parseDecoration } from "./decorations";
@@ -279,7 +279,7 @@ export async function applyUser(instance: string, u: any): Promise<string | unde
 		if (local) await sql`delete from users where id = ${local}::bigint and instance = ${instance}`;
 		return undefined;
 	}
-	if (typeof u.screen_name !== "string" || !STAFF_HANDLE.test(u.screen_name) || /^\.+$/.test(u.screen_name)) return undefined;
+	if (typeof u.screen_name !== "string" || !STRICT_HANDLE.test(u.screen_name)) return undefined;
 	const pick = (value: unknown, allowed: string[]) => (typeof value === "string" && allowed.includes(value) ? value : null);
 	const badgeUrl = new RegExp(`^https?://${instance.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/public/badge-\\d{1,19}\\.png$`);
 	const badges = (Array.isArray(u.badges) ? u.badges : [])
