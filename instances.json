@@ -1,6 +1,6 @@
 {
 	"version": 1,
-	"sequence": 11,
+	"sequence": 12,
 	"instances": [
 		{
 			"id": "giggleshitter.gay",
@@ -45,13 +45,6 @@
 			"state": "active"
 		},
 		{
-			"id": "xit.chococat.lol",
-			"name": "Xit",
-			"source_url": null,
-			"public_key": "C_9Cz5GkJjtSvWngLyVhfSTscLdcYo6Omx_EpSzQU5w",
-			"state": "active"
-		},
-		{
 			"id": "xitt.flex.pm",
 			"name": "Xittor",
 			"source_url": "https://github.com/FlexKleks/xitter",
@@ -63,6 +56,13 @@
 			"name": "Xitter",
 			"source_url": "https://github.com/Xittered/xitter",
 			"public_key": "FDWBt_uXkSyKKyM2J_9bYLfryG5N0bHFseMprag-Qv8",
+			"state": "active"
+		},
+		{
+			"id": "xitter.space",
+			"name": "Xit",
+			"source_url": "https://github.com/Xittered/xitter",
+			"public_key": "C_9Cz5GkJjtSvWngLyVhfSTscLdcYo6Omx_EpSzQU5w",
 			"state": "active"
 		},
 		{

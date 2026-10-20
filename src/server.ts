@@ -436,6 +436,8 @@ async function route(req: Request): Promise<Response | undefined> {
 	}
 	// signed out: X's own home page with its sign-in form, and the dialog
 	if (!viewer && p !== "/" && !p.startsWith("/i/jf/onboarding")) return Response.redirect("/", 302);
+	// maintenance: guests see the notice; ?staff=1 is the sign-in page, for staff
+	if (!viewer && p === "/" && settings().operations.maintenance && !url.searchParams.has("staff")) return maintenancePage(true);
 	const [communityRows, flagRows, links] = viewer
 		? await Promise.all([
 			sql`select 1 from community_members where user_id = ${viewer.id}::bigint limit 1`,
