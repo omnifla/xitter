@@ -17,7 +17,7 @@ import { backupPath, startBackups } from "./backups";
 import { memberInvitesRoute } from "./member-invites";
 import { orgRoute } from "./org-manage";
 import { menuLinks } from "./tidy";
-import { chatMediaRoute, chatSocket, juiceboxProxy, socketUser } from "./chat";
+import { chatMediaRoute, chatSocket, juiceboxProxy, socketUser, xcallsBatch } from "./chat";
 import { loadBuild } from "./build";
 import { MEDIA_DIR, mediaUpload, serveMedia } from "./media";
 import { resumeVideos } from "./video";
@@ -228,6 +228,7 @@ async function serveApi(req: Request, url: URL, viewer: Viewer | undefined): Pro
 		for (const m of body.matchAll(/.{0,160}(?:[Ee]rror|exception|stack).{0,400}/g)) console.log(`client-report ${path}: ${m[0]}`);
 	}
 	if (/^\/(i|1\.1)\/media\/upload2?\.json$/.test(path)) return mediaUpload(req, url, viewer);
+	if (path === "/xcalls/batch" && req.method === "POST") return xcallsBatch(req, viewer);
 	if (gql >= 0) {
 		const name = parts[parts.length - 1];
 		if (knownOperation(name)) {

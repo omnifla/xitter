@@ -255,7 +255,6 @@ const XCALL_MUTATIONS = new Set([
         "xCallsJoinCall",
         "xCallsLeaveCall",
         "xCallsRequestJoinCall",
-        "xCallsGenerateAuthToken",
         "xCallsSendCallEvent",
         "xCallsSendSignal",
 ]);

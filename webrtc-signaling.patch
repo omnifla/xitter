@@ -1,0 +1,322 @@
+diff --git a/src/chat.ts b/src/chat.ts
+index 0cf6294..7f89a7d 100644
+--- a/src/chat.ts
++++ b/src/chat.ts
+@@ -11,7 +11,8 @@
+ //
+ // Private keys are backed up behind a PIN with Juicebox: a Juicebox software
+ // realm (a separate service, see README) reached at /juicebox, with tokens this
+-// instance signs. Voice and video calls are not offered.
++// instance signs. Calls (XCalls) are peer to peer: the server keeps call state
++// and relays signaling, media never touches it.
+ 
+ import { pictureShape } from "./model";
+ import { createHmac, randomBytes } from "node:crypto";
+@@ -544,8 +545,15 @@ type XCallRow = {
+     created_at: Date | string;
+     updated_at: Date | string;
+     ended_at: Date | string | null;
++    metadata: Record<string, any> | null;
+ };
+ 
++function callCode(): string {
++    const bytes = randomBytes(9);
++    const code = Array.from(bytes, (b) => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
++    return `${code.slice(0, 3)}-${code.slice(3, 6)}-${code.slice(6)}`;
++}
++
+ function xcallId(vars: Vars): string {
+     return String(vars.call_id ?? vars.callId ?? vars.conference_id ?? vars.id ?? "").trim();
+ }
+@@ -554,7 +562,7 @@ async function getXCall(id: string): Promise<XCallRow | undefined> {
+     if (!id || id.length > 128) throw new ChatError("Call unavailable.");
+     const [call] = await sql`
+         select id, conversation_id, created_by::text, status, call_type,
+-               created_at, updated_at, ended_at
++               created_at, updated_at, ended_at, metadata
+         from xcalls_calls where id = ${id}
+     `;
+     return call as XCallRow | undefined;
+@@ -586,19 +594,20 @@ function xcallResult(call: XCallRow) {
+     };
+ }
+ 
+-async function startXCall(v: Viewer, vars: Vars) {
++async function createXCall(v: Viewer, vars: Vars) {
+     if (v.status !== "active") throw new ChatError("Your account cannot start calls.");
+     const conversationId = String(vars.conversation_id ?? vars.conversationId ?? "").trim() || null;
+     const callType = Number(vars.call_type ?? vars.callType ?? 1);
+     if (![1, 2, 3].includes(callType)) throw new ChatError("Invalid call type.");
++    const audioOnly = vars.audio_only === true || vars.audioOnly === true;
+     if (conversationId) await authorized(v.id, conversationId);
+ 
+-    const id = newId();
++    const id = callCode();
+     try {
+         await sql.begin(async (tx) => {
+             await tx`
+-                insert into xcalls_calls (id, conversation_id, created_by, call_type)
+-                values (${id}, ${conversationId}, ${v.id}::bigint, ${callType})
++                insert into xcalls_calls (id, conversation_id, created_by, call_type, metadata)
++                values (${id}, ${conversationId}, ${v.id}::bigint, ${callType}, ${JSON.stringify({ audio_only: audioOnly })}::jsonb)
+             `;
+             await tx`
+                 insert into xcalls_participants (call_id, user_id, state, role, joined_at)
+@@ -619,6 +628,11 @@ async function startXCall(v: Viewer, vars: Vars) {
+ 
+     const call = await getXCall(id);
+     if (!call) throw new ChatError("Call could not be created.");
++    return call;
++}
++
++async function startXCall(v: Viewer, vars: Vars) {
++    const call = await createXCall(v, vars);
+     return { data: { xchat_start_call: { call: xcallResult(call), media_credentials: null, media_session_id: null } } };
+ }
+ 
+@@ -638,7 +652,7 @@ async function getXCallPreJoinData(v: Viewer, vars: Vars) {
+     } } };
+ }
+ 
+-async function joinXCall(v: Viewer, vars: Vars) {
++async function joinXCallRow(v: Viewer, vars: Vars) {
+     if (v.status !== "active") throw new ChatError("Your account cannot join calls.");
+     const id = xcallId(vars);
+     const call = await getXCall(id);
+@@ -673,7 +687,13 @@ async function joinXCall(v: Viewer, vars: Vars) {
+     });
+ 
+     const updated = await getXCall(id);
+-    return { data: { xchat_join_call: { call: updated ? xcallResult(updated) : null, media_session_id: null } } };
++    if (!updated) throw new ChatError("Call unavailable.");
++    return updated;
++}
++
++async function joinXCall(v: Viewer, vars: Vars) {
++    const call = await joinXCallRow(v, vars);
++    return { data: { xchat_join_call: { call: xcallResult(call), media_session_id: null } } };
+ }
+ 
+ async function leaveXCall(v: Viewer, vars: Vars) {
+@@ -747,6 +767,152 @@ async function requestJoinXCall(v: Viewer, vars: Vars) {
+     return { data: { xchat_request_join_call: { success: true } } };
+ }
+ 
++const iceServers = (userId: string, callId?: string) => {
++	const urls = (process.env.XCALLS_ICE_URLS ?? "stun:stun.l.google.com:19302").split(",").map((u) => u.trim()).filter(Boolean);
++	const secret = process.env.XCALLS_TURN_SECRET;
++	if (!secret) return { urls, username: null, credential: null };
++	const username = `${Math.floor(Date.now() / 1000) + 3600}:${userId}${callId ? `.${callId}` : ""}`;
++	return { urls, username, credential: createHmac("sha1", secret).update(username).digest("base64") };
++};
++
++async function isLivePeer(callId: string, userId: string) {
++	const [row] = await sql`select 1 from xcalls_participants where call_id = ${callId} and user_id = ${userId}::bigint and state = 'joined'`;
++	return !!row;
++}
++
++async function liveXCall(vars: Vars) {
++	const call = await getXCall(xcallId(vars));
++	if (!call || !["created", "active"].includes(call.status)) throw new ChatError("Call unavailable.");
++	return call;
++}
++
++async function xcallGrant(v: Viewer, vars: Vars) {
++	const call = await liveXCall(vars);
++	await authorizeXCall(v, call);
++	const ice = iceServers(v.id, call.id);
++	return { gw_url: null, stream_jwt: null, room_id: call.id, stream_name: call.id, ice_urls: ice.urls, ice_username: ice.username, ice_credential: ice.credential };
++}
++
++const requestXCallToken = async (v: Viewer, vars: Vars) => ({ data: { xchat_request_token: await xcallGrant(v, vars) } });
++
++async function sendXCallSignal(v: Viewer, vars: Vars) {
++	const call = await liveXCall(vars);
++	if (!(await isLivePeer(call.id, v.id))) throw new ChatError("Join the call before sending signals.");
++	const sessionId = String(vars.session_id ?? vars.sessionId ?? "");
++	const kind = String(vars.kind ?? "");
++	const payload = typeof vars.payload === "string" ? vars.payload : JSON.stringify(vars.payload ?? "");
++	const seq = Number(vars.seq ?? 0);
++	if (!sessionId || sessionId.length > 128 || !kind || kind.length > 32 || payload.length > 32768 || !Number.isSafeInteger(seq)) throw new ChatError("Invalid signal.");
++	await sql`delete from xcalls_signals where call_id = ${call.id} and sent_at < now() - interval '10 minutes'`;
++	await sql`
++		insert into xcalls_signals (call_id, sender_id, sender_session_id, seq, kind, payload)
++		values (${call.id}, ${v.id}::bigint, ${sessionId}, ${seq}, ${kind}, ${payload})
++	`;
++	return { data: { xchat_send_signal: { success: true } } };
++}
++
++async function fetchXCallSignals(v: Viewer, vars: Vars) {
++	const call = await liveXCall(vars);
++	if (!(await isLivePeer(call.id, v.id))) throw new ChatError("Join the call before fetching signals.");
++	const after = Math.max(0, Number(vars.after ?? vars.cursor ?? 0) || 0);
++	const rows = await sql.begin(async (tx) => {
++		const found = await tx`
++			select s.id::text, s.sender_session_id, s.seq::text, s.kind, s.payload, (extract(epoch from s.sent_at) * 1000)::bigint::text as sent_at_msec
++			from xcalls_signals s
++			join xcalls_participants p on p.call_id = s.call_id and p.user_id = ${v.id}::bigint
++			where s.call_id = ${call.id} and s.sender_id <> ${v.id}::bigint and s.id > greatest(${after}::bigint, p.signal_cursor)
++			order by s.id limit 100
++		`;
++		if (found.length) {
++			await tx`update xcalls_participants set signal_cursor = ${found[found.length - 1].id}::bigint where call_id = ${call.id} and user_id = ${v.id}::bigint`;
++		}
++		return found;
++	});
++	return { data: { xchat_fetch_signals: {
++		signals: rows.map((r: any) => ({ sender_session_id: r.sender_session_id, seq: Number(r.seq), kind: r.kind, payload: r.payload, sent_at_msec: Number(r.sent_at_msec) })),
++		cursor: rows.length ? rows[rows.length - 1].id : String(after),
++	} } };
++}
++
++const XCALLS_P2P = process.env.XCALLS_P2P !== "0";
++const CALLING_PREFIX = "/xai.xchat_calling.v1.XChatCallingService/";
++
++async function callingCall(call: XCallRow) {
++	const rows = await sql`
++		select user_id::text as user_id, role, (extract(epoch from joined_at) * 1000)::bigint::text as joined_at_ms
++		from xcalls_participants where call_id = ${call.id} and state = 'joined' order by joined_at
++	`;
++	return {
++		call_id: call.id,
++		conversation_id: call.conversation_id,
++		host_user_id: call.created_by,
++		audio_only: !!call.metadata?.audio_only,
++		created_at_ms: String(new Date(call.created_at).getTime()),
++		participants: rows.map((r: any) => ({ user_id: r.user_id, is_host: r.role === "host", joined_at_ms: r.joined_at_ms })),
++		p2p: XCALLS_P2P,
++	};
++}
++
++function mediaCredentials(userId: string, call: XCallRow) {
++	const ice = iceServers(userId, call.id);
++	const payload = {
++		media_backend: XCALLS_P2P ? "p2p" : "hydra",
++		signaling: "service",
++		role: "publisher",
++		broadcast_id: call.id,
++		stream_name: call.id,
++		ice_servers: { uris: ice.urls, username: ice.username ?? "", password: ice.credential ?? "" },
++	};
++	return { version: 1, payload: JSON.stringify(payload) };
++}
++
++const CALLING_RPC: Record<string, (v: Viewer, body: Vars) => Promise<unknown>> = {
++	StartCall: async (v, body) => {
++		const call = await createXCall(v, body);
++		return { x_chat_start_call_result: { call: await callingCall(call), media_credentials: mediaCredentials(v.id, call) } };
++	},
++	RequestToken: async (v, body) => ({ x_chat_request_token_result: await xcallGrant(v, body) }),
++	JoinCall: async (v, body) => {
++		const call = await joinXCallRow(v, body);
++		return { x_chat_join_call_result: { call: await callingCall(call) } };
++	},
++};
++
++export async function xcallsBatch(req: Request, v: Viewer): Promise<Response> {
++	let body: any;
++	try {
++		body = await req.json();
++	} catch {
++		return Response.json({ error: "Invalid batch." }, { status: 400 });
++	}
++	const items: any[] = Array.isArray(body?.items) ? body.items.slice(0, 20) : [];
++	const ids: Record<string, string> = {};
++	const lines: string[] = [];
++	for (const [index, item] of items.entries()) {
++		const started = Date.now();
++		const path = String(item?.path ?? "");
++		const handler = path.startsWith(CALLING_PREFIX) ? CALLING_RPC[path.slice(CALLING_PREFIX.length)] : undefined;
++		let status = "OK";
++		let out: any = {};
++		if (!handler) status = "UNIMPLEMENTED";
++		else {
++			try {
++				out = await handler(v, item?.body && typeof item.body === "object" ? item.body : {});
++				const result: any = Object.values(out ?? {})[0];
++				const id = result?.call?.call_id ?? result?.room_id;
++				if (typeof id === "string") ids[`$${index}`] = id;
++			} catch (e) {
++				if (!(e instanceof ChatError)) throw e;
++				status = "FAILED_PRECONDITION";
++				out = { message: e.message };
++			}
++		}
++		lines.push(JSON.stringify({ type: "item", index, status, ms: Date.now() - started, body: out }));
++	}
++	lines.push(JSON.stringify({ type: "done", batch_id: typeof body?.batch_id === "string" ? body.batch_id.slice(0, 128) : "", ids, error: null }));
++	return new Response(`${lines.join("\n")}\n`, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-cache" } });
++}
++
+ export const chatHandlers: Record<string, (viewer: Viewer, vars: Vars) => Promise<unknown> | unknown> = {
+ 	...media.handlers,
+         xCallsStartCall: startXCall,
+@@ -754,6 +920,11 @@ export const chatHandlers: Record<string, (viewer: Viewer, vars: Vars) => Promis
+         xCallsJoinCall: joinXCall,
+         xCallsLeaveCall: leaveXCall,
+         xCallsRequestJoinCall: requestJoinXCall,
++	xCallsRequestToken: requestXCallToken,
++	xCallsRecoverMedia: requestXCallToken,
++	xCallsGenerateAuthToken: (v) => ({ data: { xchat_generate_call_auth_token: { token: socketToken(v.id) } } }),
++	xCallsSendSignal: sendXCallSignal,
++	xCallsFetchSignals: fetchXCallSignals,
+ 	GetConversationEntryDetailsQuery: async (v, vars) => {
+ 		await membership(v.id, String(vars.conversation_id));
+ 		return { data: { get_conversation_entry_details: { __typename: "XChatGetConversationEntryDetailsResponse", group_type: "Normal", read_only_reason: null } } };
+diff --git a/src/ratelimit.ts b/src/ratelimit.ts
+index 5b01f82..40bfb3d 100644
+--- a/src/ratelimit.ts
++++ b/src/ratelimit.ts
+@@ -255,7 +255,6 @@ const XCALL_MUTATIONS = new Set([
+         "xCallsJoinCall",
+         "xCallsLeaveCall",
+         "xCallsRequestJoinCall",
+-        "xCallsGenerateAuthToken",
+         "xCallsSendCallEvent",
+         "xCallsSendSignal",
+ ]);
+diff --git a/src/schema.sql b/src/schema.sql
+index 0baca6d..c3f29d4 100644
+--- a/src/schema.sql
++++ b/src/schema.sql
+@@ -1476,3 +1476,19 @@ create table if not exists xcalls_events (
+ 
+ create index if not exists xcalls_events_call_idx
+     on xcalls_events (call_id, id);
++
++alter table xcalls_participants add column if not exists signal_cursor bigint not null default 0;
++
++create table if not exists xcalls_signals (
++    id bigserial primary key,
++    call_id text not null references xcalls_calls(id) on delete cascade,
++    sender_id bigint not null references users(id) on delete cascade,
++    sender_session_id text not null,
++    seq bigint not null default 0,
++    kind text not null,
++    payload text not null default '',
++    sent_at timestamptz not null default now()
++);
++
++create index if not exists xcalls_signals_call_idx
++    on xcalls_signals (call_id, id);
+diff --git a/src/server.ts b/src/server.ts
+index 645113e..283f0da 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -17,7 +17,7 @@ import { backupPath, startBackups } from "./backups";
+ import { memberInvitesRoute } from "./member-invites";
+ import { orgRoute } from "./org-manage";
+ import { menuLinks } from "./tidy";
+-import { chatMediaRoute, chatSocket, juiceboxProxy, socketUser } from "./chat";
++import { chatMediaRoute, chatSocket, juiceboxProxy, socketUser, xcallsBatch } from "./chat";
+ import { loadBuild } from "./build";
+ import { MEDIA_DIR, mediaUpload, serveMedia } from "./media";
+ import { resumeVideos } from "./video";
+@@ -228,6 +228,7 @@ async function serveApi(req: Request, url: URL, viewer: Viewer | undefined): Pro
+ 		for (const m of body.matchAll(/.{0,160}(?:[Ee]rror|exception|stack).{0,400}/g)) console.log(`client-report ${path}: ${m[0]}`);
+ 	}
+ 	if (/^\/(i|1\.1)\/media\/upload2?\.json$/.test(path)) return mediaUpload(req, url, viewer);
++	if (path === "/xcalls/batch" && req.method === "POST") return xcallsBatch(req, viewer);
+ 	if (gql >= 0) {
+ 		const name = parts[parts.length - 1];
+ 		if (knownOperation(name)) {

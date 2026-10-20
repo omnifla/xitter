@@ -1476,3 +1476,19 @@ create table if not exists xcalls_events (
 
 create index if not exists xcalls_events_call_idx
     on xcalls_events (call_id, id);
+
+alter table xcalls_participants add column if not exists signal_cursor bigint not null default 0;
+
+create table if not exists xcalls_signals (
+    id bigserial primary key,
+    call_id text not null references xcalls_calls(id) on delete cascade,
+    sender_id bigint not null references users(id) on delete cascade,
+    sender_session_id text not null,
+    seq bigint not null default 0,
+    kind text not null,
+    payload text not null default '',
+    sent_at timestamptz not null default now()
+);
+
+create index if not exists xcalls_signals_call_idx
+    on xcalls_signals (call_id, id);
