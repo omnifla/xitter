@@ -1,5 +1,7 @@
 // THEME_SCRIPT, the in-page boot script, and LINK_SCOPES it interpolates.
 
+import { STEAM_STILL_PATH, STEAM_VIDEO_PATH } from "../steam-items";
+import { RELATION_BUTTON } from "../x-selectors";
 import { ACCENT_IDS, ACCENTS } from "./presets";
 import { NIGHT_MODE_ATTR } from "./validate";
 
@@ -12,6 +14,8 @@ export const LINK_SCOPES = [
 
 export const THEME_SCRIPT = String.raw`(function(){
 	var X=window.__XITTER__||{};
+	var STEAM_STILL=new RegExp(${JSON.stringify(STEAM_STILL_PATH.source)});
+	var STEAM_VIDEO=new RegExp(${JSON.stringify(STEAM_VIDEO_PATH.source)});
 	var theme=X.theme||null;
 	var look=X.look||null;
 	var accents=${JSON.stringify(ACCENTS)};
@@ -21,6 +25,7 @@ export const THEME_SCRIPT = String.raw`(function(){
 	var scopes=${JSON.stringify(LINK_SCOPES)};
 	var presets=X.themePresets||[];
 	var sheet,fontSheet,accentSheet,at=0,timer,key="",accentKey="";
+	var RELATION=${JSON.stringify(RELATION_BUTTON)};
 	var CHIRP='TwitterChirp,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif';
 	var TICK='<svg viewBox="0 0 24 24" aria-hidden="true"><g><path d="M9.64 18.952l-5.55-4.861 1.317-1.504 3.951 3.459 8.459-10.948L19.4 6.32 9.64 18.952z"></path></g></svg>';
 	var GOLD={"226, 183, 25":1,"212, 167, 44":1};
@@ -105,6 +110,8 @@ export const THEME_SCRIPT = String.raw`(function(){
 	}
 	function applyAccentVars(){
 		var a=resolveAccent(accentWire),h=document.documentElement,hover=mix(hexRgb(a.solid),hexRgb("#0f1419"),0.12);
+		// on a decorated profile only the choice is kept, for when the theme comes back
+		if(held){resolved=a;forcedColor=a.custom?"blue500":a.id;return}
 		h.style.setProperty("--xt-accent",a.solid);
 		h.style.setProperty("--xt-accent-fill",a.fill);
 		h.style.setProperty("--xt-accent-soft",rgba(a.solid,0.1));
@@ -158,15 +165,18 @@ export const THEME_SCRIPT = String.raw`(function(){
 		return "url(#"+id+")";
 	}
 	function paintChecks(){
+		if(held)return;
 		var fill=accentGradUrl(),color=resolved.solid;
 		document.querySelectorAll('svg[data-testid="icon-verified"]').forEach(function(svg){
 			if(svg.closest("[data-xitter-badges],[data-xitter-frame],[data-xitter-framed],.xitter-deco,[data-xitter-decor-bg]"))return;
 			if(keptCheck(svg))return;
+			svg.setAttribute("data-xitter-tinted","");
 			svg.style.setProperty("color",color,"important");
 			svg.style.setProperty("fill",fill,"important");
 			svg.querySelectorAll("path,g").forEach(function(n){
 				var k=rgbKey(getComputedStyle(n).fill);
 				if(GOLD[k]||GREY[k])return;
+				n.setAttribute("data-xitter-tinted","");
 				n.style.setProperty("fill",fill,"important");
 			});
 		});
@@ -207,8 +217,34 @@ export const THEME_SCRIPT = String.raw`(function(){
 	}
 	var VAR_KEYS=["--xt-bg","--xt-surface","--xt-text","--xt-secondary","--xt-muted","--xt-link","--xt-border","--xt-divider","--xt-accent","--xt-accent-fill","--xt-button","--xt-button-text","--xt-button-hover","--xt-header","--xt-hover","--xt-input","--xt-input-text","--xt-input-border","--xt-menu","--xt-tooltip","--xt-icon","--xt-icon-active","--xt-reply","--xt-repost","--xt-like","--xt-bookmark","--xt-views","--xt-secondary-button","--xt-secondary-button-border","--xt-secondary-button-text","--xt-badge","--xt-selection","--xt-accent-soft","--xt-reply-soft","--xt-repost-soft","--xt-like-soft","--xt-bookmark-soft"];
 	var ACCENT_KEYS={"--xt-accent":1,"--xt-accent-fill":1,"--xt-accent-soft":1,"--xt-accent-hover":1};
+	// An organization's decor owns its profile. While the decor script marks the
+	// page with data-xitter-decor, the viewer's theme and accent step aside
+	// whole: no theme or accent attribute (every rule here and in the boot CSS
+	// hangs off one), no --xt-* values, no tinted ticks, no theme video. Leaving
+	// the profile, the decor script drops its mark and the theme comes back.
+	var held=false;
+	function stepAside(){
+		var h=document.documentElement;
+		held=true;
+		h.removeAttribute("data-xitter-theme");
+		h.removeAttribute("data-xitter-accent");
+		VAR_KEYS.concat(["--xt-accent-hover","--xt-accent-tint","--xt-accent-text"]).forEach(function(k){h.style.removeProperty(k)});
+		document.querySelectorAll("[data-xitter-tinted]").forEach(function(n){n.style.removeProperty("color");n.style.removeProperty("fill");n.removeAttribute("data-xitter-tinted")});
+		var v=document.body&&document.body.querySelector(":scope > [data-xitter-theme-bg]");
+		if(v)v.remove();
+	}
+	function syncDecor(){
+		var on=document.documentElement.hasAttribute("data-xitter-decor");
+		if(on&&!held)stepAside();
+		else if(!on&&held){
+			held=false;
+			if(theme)apply(theme);
+			else{applyAccentVars();paintAccent()}
+		}
+	}
 	function apply(t){
 		theme=t;
+		if(held)return;
 		var h=document.documentElement;
 		if(!t){
 			h.removeAttribute("data-xitter-theme");
@@ -216,6 +252,7 @@ export const THEME_SCRIPT = String.raw`(function(){
 			if(sheet)sheet.textContent="";
 			applyFonts(null);
 			writeBase(false);
+			syncThemeVideo();
 			key="";
 			applyAccentVars();
 			paintAccent();
@@ -224,8 +261,8 @@ export const THEME_SCRIPT = String.raw`(function(){
 		h.setAttribute("data-xitter-theme",t.id||"custom");
 		var v=varsOf(t),k;
 		for(k in v)h.style.setProperty(k,v[k]);
-		var sameBg=t.background&&X.theme&&X.theme.background&&t.background.mediaId&&t.background.mediaId===X.theme.background.mediaId;
-		writeBase(!!sameBg);
+		writeBase(bgMatches(t));
+		syncThemeVideo();
 		applyFonts(t);
 		key="";
 		applyAccentVars();
@@ -274,7 +311,7 @@ export const THEME_SCRIPT = String.raw`(function(){
 			muted:{"113, 118, 123":1,"89, 93, 98":1},
 			border:{"47, 51, 54":1,"51, 54, 57":1,"62, 65, 68":1,"75, 78, 82":1},
 			surface:{"22, 24, 28":1,"32, 35, 39":1},
-			menu:{"32, 35, 39":1,"42, 45, 48":1},
+			menu:{"32, 35, 39":1,"42, 45, 48":1,"20, 20, 20":1},
 			header:{"0, 0, 0, 0.65":1},
 			buttonBg:{"239, 243, 244":1},
 			buttonText:{"15, 20, 25":1},
@@ -286,15 +323,25 @@ export const THEME_SCRIPT = String.raw`(function(){
 			iconActiveFill:{"231, 233, 234":1}
 		};
 	}
+	var glassOn=false;
 	function wrap(sel, pageBg){
 		var skip=sel+':not(img):not(svg[data-testid="icon-verified"]):not(svg[aria-label="Translator account"]):not(.xitter-deco):not([data-xitter-badges]):not([data-xitter-frame]):not([data-xitter-framed]):not([data-xitter-decor-bg]):not(:is(svg[data-testid="icon-verified"] *,svg[aria-label="Translator account"] *,[data-xitter-badges] *,[data-xitter-frame],[data-xitter-framed] *,[data-xitter-decor-bg] *,.xitter-deco,[aria-label="Color options"] *))';
+		if(glassOn)skip+=':not([data-testid="primaryColumn"]):not(main[role="main"] section[role="region"]:not([data-testid="primaryColumn"] *)):not([data-testid="primaryColumn"] [role="tablist"]:not([data-testid="toolBar"] *)):not([data-testid="primaryColumn"] [style*="position: sticky"]):not(header[role="banner"]>div>div)';
 		if(pageBg)return 'html[data-xitter-theme]:not([data-xitter-decor]) '+skip;
 		return 'html[data-xitter-theme]:not([data-xitter-decor]) '+skip+',html[data-xitter-theme][data-xitter-decor] '+skip+':not([data-testid="primaryColumn"] *)';
 	}
+	var trailing=null;
 	function paint(){
-		if(!theme||Date.now()-at<1000)return;
+		if(!theme)return;
+		// at most once a second, but the last call is never dropped: X adds its
+		// classes with insertRule, which no observer sees, so a page that settles
+		// inside the second would otherwise keep its unthemed classes
+		if(Date.now()-at<1000){
+			if(!trailing)trailing=setTimeout(function(){trailing=null;tick()},1000-(Date.now()-at)+50);
+			return;
+		}
 		at=Date.now();
-		var p=pal(),found={pagebg:[],surface:[],text:[],secondary:[],muted:[],border:[],accentColor:[],accentBg:[],accentHover:[],accentSoft:[],accentOutline:[],button:[],buttonText:[],header:[],hover:[],menu:[],input:[],tooltip:[],icon:[],iconFill:[],iconActiveFill:[],repost:[],repostBg:[],like:[],likeBg:[],chirp:[]};
+		var p=pal(),found={pagebg:[],surface:[],text:[],secondary:[],muted:[],border:[],accentColor:[],accentBg:[],accentHover:[],accentSoft:[],accentOutline:[],button:[],buttonText:[],header:[],hover:[],menu:[],input:[],tooltip:[],icon:[],iconFill:[],iconActiveFill:[],repost:[],repostBg:[],like:[],likeBg:[],chirp:[]},posSels=[];
 		function note(kind,sel){if(!found[kind])found[kind]=[];if(found[kind].indexOf(sel)<0)found[kind].push(sel)}
 		[].forEach.call(document.styleSheets,function(ss){
 			var rules;try{rules=ss.cssRules}catch(e){return}
@@ -302,6 +349,8 @@ export const THEME_SCRIPT = String.raw`(function(){
 				if(!r.selectorText||!r.style||!/^\.[\w-]+$/.test(r.selectorText))return;
 				var c=norm(r.style.color),bg=norm(r.style.backgroundColor),bd=norm(r.style.borderColor),fl=norm(r.style.fill),ol=norm(r.style.outlineColor),sel=r.selectorText;
 				var ff=r.style.fontFamily||"";
+				if(r.style.position==="fixed"||r.style.position==="absolute"){if(posSels.indexOf(sel)<0)posSels.push(sel)}
+				if(parseFloat(r.style.borderTopLeftRadius)>=12)note("rounded",sel);
 				if(ff.indexOf("TwitterChirp")>=0)note("chirp",sel);
 				if(p.bg[bg])note("pagebg",sel);
 				if(p.surface[bg])note("surface",sel);
@@ -363,13 +412,52 @@ export const THEME_SCRIPT = String.raw`(function(){
 			});
 		});
 		var css=[],k;
-		function add(kind,decl,pageBg){(found[kind]||[]).forEach(function(sel){css.push(wrap(sel,pageBg)+"{"+decl+"}")})}
+		function add(kind,decl,pageBg){
+			glassOn=!!(theme.background&&typeof X.pageChrome==="string"&&X.pageChrome&&decl.indexOf("background")>=0);
+			(found[kind]||[]).forEach(function(sel){css.push(wrap(sel,pageBg)+"{"+decl+"}")});
+			glassOn=false;
+		}
 		add("pagebg","background-color:transparent!important",true);
+		if((found.pagebg||[]).length&&posSels.length){
+			// Same frost skip as the transparent rule above, so these win on order
+			// instead of losing to its longer :not() chain on specificity.
+			glassOn=!!(theme.background&&typeof X.pageChrome==="string"&&X.pageChrome);
+			// The sidebar's search band is a fixed layer too, but it is a strip of
+			// page, not a popover: it stays clear and the pill inside is the glass.
+			var layer=":is("+found.pagebg.join(",")+")",band=":not(:has([role=\"search\"]))";
+			css.push(wrap(layer+":is("+posSels.join(",")+")"+band) + "{background:var(--xt-menu)!important}");
+			css.push(wrap(layer+"[style*=\"position: fixed\"]"+band) + "{background:var(--xt-menu)!important}");
+			css.push(wrap(layer+"[style*=\"position: absolute\"]"+band) + "{background:var(--xt-menu)!important}");
+			// Inside a dialog the page's black is the dialog's own surface, as in the
+			// media viewer's reply panel: made clear, the page behind read through it
+			css.push(wrap('[aria-modal="true"] '+layer) + "{background:var(--xt-menu)!important}");
+			glassOn=false;
+		}
+		// Over an image, the glass goes on X's own rounded boxes in the sidebar:
+		// each module's card (empty ones too) and the search pill. They are found
+		// by their page-background and corner classes, so the tint follows the
+		// corners, and the square wrappers inside and around stay clear.
+		if(theme.background&&typeof X.pageChrome==="string"&&X.pageChrome&&(found.pagebg||[]).length&&(found.rounded||[]).length){
+			glassOn=true;
+			var card=wrap('[data-testid="sidebarColumn"] :is('+found.pagebg.join(",")+'):is('+found.rounded.join(",")+')'+(posSels.length?':not(:is('+posSels.join(",")+'))':''),true);
+			glassOn=false;
+			css.push(card+"{background:color-mix(in srgb,var(--xt-surface) var(--xt-bg-panel),transparent)!important;-webkit-backdrop-filter:blur(14px)!important;backdrop-filter:blur(14px)!important}");
+			css.push("@supports not ((-webkit-backdrop-filter:blur(1px)) or (backdrop-filter:blur(1px))){"+card+"{background:color-mix(in srgb,var(--xt-surface) 92%,transparent)!important}}");
+		}
+		// A sidebar module with nothing to show is hidden: one that is only its
+		// border, and one whose only content is X's empty-state message ("No
+		// items"). It's matched on what the card holds, not when it was seen, so
+		// a module that fills in later comes back, and one that empties goes.
+		if((found.pagebg||[]).length&&(found.rounded||[]).length){
+			var box='[data-testid="sidebarColumn"] :is('+found.pagebg.join(",")+'):is('+found.rounded.join(",")+')';
+			css.push(wrap(box+':is(:empty,:has(> [data-testid="emptyState"]):not(:has(> :not([data-testid="emptyState"]))))',true)+"{display:none!important}");
+		}
 		add("surface","background:var(--xt-surface)!important",false);
 		add("menu","background:var(--xt-menu)!important",false);
 		add("header","background-color:var(--xt-header)!important",false);
 		add("hover","background-color:var(--xt-hover)!important",false);
-		add("input","background-color:var(--xt-input)!important;color:var(--xt-input-text)!important;border-color:var(--xt-input-border)!important",false);
+		add("input","background-color:var(--xt-input)!important",false);
+		add("input","color:var(--xt-input-text)!important;border-color:var(--xt-input-border)!important",false);
 		add("tooltip","background-color:var(--xt-tooltip)!important",false);
 		add("text","color:var(--xt-text)!important",false);
 		add("secondary","color:var(--xt-secondary)!important",false);
@@ -395,17 +483,17 @@ export const THEME_SCRIPT = String.raw`(function(){
 		add("repostBg","background-color:var(--xt-repost-soft)!important",false);
 		add("like","color:var(--xt-like)!important;fill:var(--xt-like)!important",false);
 		add("likeBg","background-color:var(--xt-like-soft)!important",false);
-		css.push('html[data-xitter-theme] [data-testid="reply"],html[data-xitter-theme] [data-testid="reply"] svg{color:var(--xt-reply)!important;fill:var(--xt-reply)!important}');
+		css.push('html[data-xitter-theme] [data-testid="reply"]:hover,html[data-xitter-theme] [data-testid="reply"]:hover svg{color:var(--xt-reply)!important;fill:var(--xt-reply)!important}');
 		css.push('html[data-xitter-theme] [data-testid="reply"]:hover [style*="background-color: rgba(29, 155, 240"]{background-color:var(--xt-reply-soft)!important}');
-		css.push('html[data-xitter-theme] [data-testid="retweet"],html[data-xitter-theme] [data-testid="retweet"] svg{color:var(--xt-repost)!important;fill:var(--xt-repost)!important}');
-		css.push('html[data-xitter-theme] [data-testid="like"],html[data-xitter-theme] [data-testid="like"] svg{color:var(--xt-like)!important;fill:var(--xt-like)!important}');
-		css.push('html[data-xitter-theme] [data-testid="bookmark"],html[data-xitter-theme] [data-testid="bookmark"] svg,html[data-xitter-theme] [aria-label="Share post"] svg{color:var(--xt-bookmark)!important;fill:var(--xt-bookmark)!important}');
+		css.push('html[data-xitter-theme] [data-testid="retweet"]:hover,html[data-xitter-theme] [data-testid="retweet"]:hover svg{color:var(--xt-repost)!important;fill:var(--xt-repost)!important}');
+		css.push('html[data-xitter-theme] [data-testid="like"]:hover,html[data-xitter-theme] [data-testid="like"]:hover svg{color:var(--xt-like)!important;fill:var(--xt-like)!important}');
+		css.push('html[data-xitter-theme] [data-testid="bookmark"]:hover,html[data-xitter-theme] [data-testid="bookmark"]:hover svg,html[data-xitter-theme] [aria-label="Share post"]:hover svg{color:var(--xt-bookmark)!important;fill:var(--xt-bookmark)!important}');
 		css.push('html[data-xitter-theme] [data-testid="bookmark"]:hover [style*="background-color: rgba(29, 155, 240"],html[data-xitter-theme] [aria-label="Share post"]:hover [style*="background-color: rgba(29, 155, 240"]{background-color:var(--xt-bookmark-soft)!important}');
 		css.push('html[data-xitter-theme] [data-testid="retweet"]:hover [style*="background-color: rgba(0, 186, 124"]{background-color:var(--xt-repost-soft)!important}');
 		css.push('html[data-xitter-theme] [data-testid="like"]:hover [style*="background-color: rgba(249, 24, 128"]{background-color:var(--xt-like-soft)!important}');
 		css.push('html[data-xitter-theme] [data-testid="app-text-transition-container"]{color:var(--xt-views)!important}');
-		css.push('html[data-xitter-theme] a[href="/notifications"] div[dir],html[data-xitter-theme] [data-testid="AppTabBar_Notifications_Link"] div[style*="background"]{background-color:var(--xt-badge)!important}');
-		css.push('html[data-xitter-theme] [data-testid="placementTracking"] button,html[data-xitter-theme] a[data-testid="editProfileButton"]{background:var(--xt-secondary-button)!important;border-color:var(--xt-secondary-button-border)!important;color:var(--xt-secondary-button-text)!important}');
+		css.push('html[data-xitter-theme] [data-testid="AppTabBar_Notifications_Link"] div[style*="background"]{background-color:var(--xt-badge)!important}');
+		css.push('html[data-xitter-theme] [data-testid="placementTracking"] '+RELATION+',html[data-xitter-theme] a[data-testid="editProfileButton"]{background:var(--xt-secondary-button)!important;border-color:var(--xt-secondary-button-border)!important;color:var(--xt-secondary-button-text)!important}');
 		if(theme.font&&fontOk(theme.font.ui)){
 			(found.chirp||[]).forEach(function(sel){css.push('html[data-xitter-theme] '+sel+'{font-family:"'+theme.font.ui+'",'+CHIRP+'!important}')});
 		}
@@ -719,12 +807,88 @@ export const THEME_SCRIPT = String.raw`(function(){
 	}
 	writeBase(!!(theme&&theme.background));
 	document.head.appendChild(base);
+	var videoCss=document.createElement("style");
+	videoCss.setAttribute("data-xitter-theme-video","");
+	videoCss.textContent='[data-xitter-theme-bg]{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}#preview [data-xitter-theme-bg]{position:absolute}[data-xitter-theme-bg] video{position:absolute;inset:0;width:100%;height:100%}';
+	document.head.appendChild(videoCss);
 	seedThemeColor();
 	applyAccentVars();
 	if(theme)apply(theme);
 	else paintAccent();
 	nudge();
-	function tick(){if(theme)paint();paintAccent();display()}
+	function sourceKey(b){
+		if(!b)return "";
+		if(b.mediaId)return "u:"+b.mediaId;
+		if(b.steam&&b.steam.defid)return "s:"+String(b.steam.defid);
+		return "";
+	}
+	function bgMatches(t){
+		var a=sourceKey(t&&t.background),b=sourceKey(X.theme&&X.theme.background);
+		return !!(a&&a===b);
+	}
+	function mountThemeVideo(host,motion,knobs){
+		if(!host)return;
+		var old=host.querySelector(":scope > [data-xitter-theme-bg]");
+		if(document.documentElement.hasAttribute("data-xitter-decor")||!motion||(!motion.movie&&!motion.mp4)||matchMedia("(prefers-reduced-motion: reduce)").matches||(knobs&&knobs.fit==="tile")){
+			if(old)old.remove();
+			return;
+		}
+		var movie=typeof motion.movie==="string"&&STEAM_VIDEO.test(motion.movie)?motion.movie:"";
+		var mp4=typeof motion.mp4==="string"&&STEAM_VIDEO.test(motion.mp4)?motion.mp4:"";
+		if(!movie&&!mp4){if(old)old.remove();return}
+		var key=movie+"|"+mp4;
+		var v=old&&old.getAttribute("data-key")===key?old.querySelector("video"):null;
+		if(!v){
+			if(old)old.remove();
+			var div=document.createElement("div");
+			div.setAttribute("data-xitter-theme-bg","");
+			div.setAttribute("data-key",key);
+			v=document.createElement("video");
+			v.muted=true;v.loop=true;v.autoplay=true;v.playsInline=true;v.setAttribute("playsinline","");
+			var poster=typeof motion.image==="string"&&STEAM_STILL.test(motion.image)?motion.image:"";
+			if(poster)v.poster=poster;
+			if(movie){var s1=document.createElement("source");s1.src=movie;s1.type="video/webm";v.appendChild(s1)}
+			if(mp4){var s2=document.createElement("source");s2.src=mp4;s2.type="video/mp4";v.appendChild(s2)}
+			div.appendChild(v);
+			host.prepend(div);
+			old=div;
+		}
+		var fit=knobs&&knobs.fit==="contain"?"contain":"cover";
+		var pos=knobs&&(knobs.position==="top"||knobs.position==="bottom")?knobs.position:"center";
+		var scale=knobs&&typeof knobs.scale==="number"?knobs.scale:100;
+		var blur=knobs&&typeof knobs.blur==="number"?knobs.blur:0;
+		v.style.objectFit=fit;
+		v.style.objectPosition=pos;
+		v.style.width=scale===100?"100%":scale+"%";
+		v.style.height=scale===100?"100%":scale+"%";
+		v.style.filter=blur?"blur("+blur+"px)":"";
+	}
+	function syncThemeVideo(){
+		if(!document.body)return;
+		var motion=X.steamMotion;
+		var b=!held&&theme&&theme.background;
+		var same=bgMatches(theme)&&motion&&b&&b.steam&&String(motion.defid)===String(b.steam.defid);
+		if(!same){
+			var gone=document.body.querySelector(":scope > [data-xitter-theme-bg]");
+			if(gone)gone.remove();
+			return;
+		}
+		var poster="";
+		var chrome=typeof X.pageChrome==="string"?X.pageChrome:"";
+		var found=/--xt-bg-image:url\("([^"]+)"\)/.exec(chrome);
+		if(found&&STEAM_STILL.test(found[1]))poster=found[1];
+		mountThemeVideo(document.body,{defid:motion.defid,movie:motion.movie,mp4:motion.mp4,image:poster},b);
+	}
+	function tick(){syncDecor();if(theme)paint();paintAccent();display();syncThemeVideo()}
 	tick();
 	new MutationObserver(function(){if(!timer)timer=setTimeout(function(){timer=null;tick()},150)}).observe(document.documentElement,{childList:true,subtree:true});
+	new MutationObserver(syncDecor).observe(document.documentElement,{attributes:true,attributeFilter:["data-xitter-decor"]});
+	// and the rules X adds later, with no change to the page, are counted
+	var ruleCount=0;
+	setInterval(function(){
+		if(document.hidden)return;
+		var n=0;
+		[].forEach.call(document.styleSheets,function(ss){try{n+=ss.cssRules.length}catch(e){}});
+		if(n!==ruleCount){ruleCount=n;if(!timer)timer=setTimeout(function(){timer=null;tick()},150)}
+	},1500);
 })();`;

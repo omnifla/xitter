@@ -63,7 +63,18 @@ test("only plain https document URLs are client IDs", () => {
 test("a valid document is used, with its redirects kept to its own host", async () => {
 	const url = fresh();
 	serve({ client_id: url, client_name: "xit mob", redirect_uris: ["https://app.example/", "https://evil.example/", "http://app.example/x"], token_endpoint_auth_method: "none" });
-	expect(await clientMetadata(url)).toEqual({ url, name: "xit mob", redirects: ["https://app.example/"] });
+	expect(await clientMetadata(url)).toEqual({ url, name: "xit mob", redirects: ["https://app.example/"], logo: null });
+});
+
+test("logo_uri becomes the icon when it's https on the document's host", async () => {
+	let url = fresh();
+	serve({ client_id: url, redirect_uris: ["https://app.example/"], logo_uri: "https://app.example/icon.png" });
+	expect((await clientMetadata(url))?.logo).toBe("https://app.example/icon.png");
+	for (const logo of ["https://elsewhere.example/icon.png", "http://app.example/icon.png", "javascript:alert(1)", 42]) {
+		url = fresh();
+		serve({ client_id: url, redirect_uris: ["https://app.example/"], logo_uri: logo });
+		expect((await clientMetadata(url))?.logo).toBeNull();
+	}
 });
 
 test("the document is cached", async () => {

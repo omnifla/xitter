@@ -2,33 +2,59 @@
 
 import type { Viewer } from "../auth";
 import { prepareFonts } from "../fonts";
-import { accentWire, type Accent, type Theme } from "./presets";
+import { resolveBackgroundItem, steamDefId, steamStillPath, steamVideoPath, type SteamDefId, type StoredSteam } from "../steam-items";
+import { PRESETS, accentWire, type Accent, type Theme } from "./presets";
 import {
 	NIGHT_MODE_ATTR,
+	STEAM_MISSING,
 	THEME_FILE_MAX,
 	applyWrite,
 	copyTheme,
 	exportTheme,
+	finishBackground,
 	importTheme,
 	lookView,
-	mergeSavedBackground,
 	modeOf,
+	backgroundKnobs,
 	overlayAccent,
 	parseLookWrite,
 	readPrefs,
 	themeFileName,
+	type ImportedTheme,
 	type Look,
 	type LookWrite,
 	type Prefs,
+	type ThemeError,
 } from "./validate";
 
 export async function themeImport(req: Request, _viewer: Viewer): Promise<Response> {
 	if (req.method !== "POST") return Response.json({ ok: false, errors: [{ path: "", message: "use POST" }] }, { status: 405 });
 	const announced = Number(req.headers.get("content-length"));
 	if (Number.isFinite(announced) && announced > THEME_FILE_MAX) return Response.json({ ok: false, errors: [{ path: "", message: "file is too large" }] }, { status: 400 });
-	const result = importTheme(await req.text());
+	const result = await importResolvedTheme(await req.text());
 	if (!result.ok) return Response.json({ ok: false, errors: result.errors }, { status: 400 });
-	return Response.json({ ok: true, theme: result.theme, warnings: result.warnings });
+	return Response.json(result.preview ? { ok: true, theme: result.theme, warnings: result.warnings, preview: result.preview } : { ok: true, theme: result.theme, warnings: result.warnings });
+}
+
+export type SteamPreview = { readonly image: string; readonly movie: string | null; readonly mp4: string | null };
+
+export async function importResolvedTheme(
+	text: string,
+	resolve: (defid: SteamDefId) => Promise<StoredSteam | undefined> = resolveBackgroundItem,
+): Promise<{ ok: true; theme: ImportedTheme; warnings: readonly string[]; preview?: SteamPreview } | { ok: false; errors: readonly ThemeError[] }> {
+	const parsed = importTheme(text);
+	if (!parsed.ok) return parsed;
+	const wire = parsed.theme.background?.steam?.defid;
+	if (wire === undefined) return parsed;
+	const defid = steamDefId(wire);
+	const item = defid ? await resolve(defid).catch(() => undefined) : undefined;
+	if (!item) return { ok: false, errors: [{ path: "theme.background.steam", message: STEAM_MISSING }] };
+	return {
+		ok: true,
+		theme: parsed.theme,
+		warnings: parsed.warnings,
+		preview: { image: steamStillPath(item), movie: steamVideoPath(item, "movie"), mp4: steamVideoPath(item, "mp4") },
+	};
 }
 
 export async function themeExport(req: Request, viewer: Viewer): Promise<Response> {
@@ -58,7 +84,7 @@ async function keepOwnedBackground(userId: string, theme: Theme, warnings: strin
 	if (owned) return theme;
 	warnings.push("that background image isn't on this account");
 	const next = copyTheme(theme);
-	next.background = { fit: theme.background!.fit, position: theme.background!.position, dim: theme.background!.dim, blur: theme.background!.blur };
+	next.background = backgroundKnobs(theme.background!);
 	return next;
 }
 
@@ -68,13 +94,22 @@ export async function commitLook(
 	write: LookWrite,
 	accent: Accent | undefined,
 	warnings: readonly string[] = [],
-): Promise<{ look: Look | null; accent: Accent; warnings: readonly string[] }> {
+	resolve: (defid: SteamDefId) => Promise<StoredSteam | undefined> = resolveBackgroundItem,
+): Promise<{ ok: true; look: Look | null; accent: Accent; warnings: readonly string[] } | { ok: false; error: typeof STEAM_MISSING }> {
 	const nextWarnings = [...warnings];
-	let next = write;
+	const nextAccent = accent ?? current.accent;
+	let look: Look | null;
 	if (write.type === "paint") {
 		const stored = current.look?.kind === "painted" ? current.look.theme : undefined;
-		let theme = mergeSavedBackground(stored, write.theme, write.peel, write.mediaIdSent);
-		theme = await keepOwnedBackground(userId, theme, nextWarnings);
+		let resolved: StoredSteam | undefined;
+		if (write.source.tag === "steam" && write.peel === "frame" && !PRESETS[write.theme.id]) {
+			const prev = stored?.background?.steam;
+			if (prev && prev.defid === write.source.defid) resolved = prev;
+			else resolved = await resolve(write.source.defid).catch(() => undefined);
+		}
+		const finished = finishBackground(stored, write.theme, write.peel, write.source, resolved);
+		if (!finished.ok) return { ok: false, error: finished.error };
+		let theme = await keepOwnedBackground(userId, finished.theme, nextWarnings);
 		if (theme.font) {
 			const prep = await prepareFonts(theme.font);
 			nextWarnings.push(...prep.warnings);
@@ -84,12 +119,10 @@ export async function commitLook(
 				delete theme.font;
 			}
 		}
-		next = { type: "paint", theme, peel: write.peel, mediaIdSent: write.mediaIdSent };
-	}
-	const nextAccent = accent ?? current.accent;
-	const look = overlayAccent(applyWrite(current.look, next), nextAccent);
+		look = overlayAccent({ kind: "painted", theme }, nextAccent);
+	} else look = overlayAccent(applyWrite(current.look, write), nextAccent);
 	await saveLook(userId, look, nextAccent);
-	return { look, accent: nextAccent, warnings: nextWarnings };
+	return { ok: true, look, accent: nextAccent, warnings: nextWarnings };
 }
 
 async function saveLook(userId: string, look: Look | null, accent: Accent): Promise<void> {
@@ -124,6 +157,7 @@ export async function themeApi(req: Request, viewer: Viewer): Promise<Response> 
 	const parsed = parseLookWrite(body);
 	if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 	const saved = await commitLook(viewer.id, current, parsed.write, parsed.accent, parsed.warnings);
+	if (!saved.ok) return Response.json({ error: saved.error }, { status: 400 });
 	const headers = new Headers();
 	for (const c of nightModeCookies(saved.look)) headers.append("set-cookie", c);
 	const view = lookView(saved.look, saved.accent);

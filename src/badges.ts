@@ -66,38 +66,13 @@ export const BADGES_SCRIPT = String.raw`(function(){
 	var SEL='[data-testid="User-Name"],[data-testid="UserName"],[data-testid="UserCell"],[data-testid="HoverCard"],[data-testid="SideNav_AccountSwitcher_Button"],[data-testid="primaryColumn"] h2';
 	function handle(box){
 		var spans=box.querySelectorAll("span");
-		for(var i=0;i<spans.length;i++){var full=spans[i].getAttribute("data-xitter-handle");if(full)return full;var m=/^@([^\s\/\?#@%,:]{1,50}(?:@[a-zA-Z0-9.-]{1,253}(?::\d{1,5})?)?)$/.exec(spans[i].textContent);if(m)return m[1].toLowerCase()}
+		for(var i=0;i<spans.length;i++){var m=/^@([^\s\/\?#@%,:]{1,50}(?:@[a-zA-Z0-9.-]{1,253}(?::\d{1,5})?)?)$/.exec(spans[i].textContent);if(m)return m[1].toLowerCase()}
 		// a profile's top bar has the name but no handle: the page's address does
 		if(box.tagName==="H2"){
 			var p=/^\/([^\/?#]{1,150})(?:\/|$)/.exec(location.pathname);
 			var profile=/^\/[^\/?#]+\/?$/.test(location.pathname);
 			if(p&&(box.querySelector('div[style*="height: calc(1.0625em)"]')||box.querySelector('svg[data-testid="icon-verified"]')||profile&&box.getAttribute("dir")))try{return decodeURIComponent(p[1]).toLowerCase()}catch(e){}
 		}
-	}
-	// names show "@name" for someone from another instance; the whole handle
-	// stays on the element (and its tooltip), and the globe badge says where
-	// they're from. Only the text changes, in place, so the client's own copy
-	// of it stays its own: when it writes the long one back, it's shortened again.
-	function shorten(box){
-		var spans=[box].concat([].slice.call(box.querySelectorAll("span, a")));
-		for(var i=0;i<spans.length;i++){
-			var t=spans[i].firstChild;
-			if(!t||t.nodeType!==3||spans[i].childNodes.length!==1)continue;
-			var m=/^@([^\s\/\?#@%,:]{1,50})@([a-zA-Z0-9.-]{1,253}(?::\d{1,5})?)$/.exec(t.nodeValue);
-			if(!m)continue;
-			spans[i].setAttribute("data-xitter-handle",(m[1]+"@"+m[2]).toLowerCase());
-			spans[i].title="@"+m[1]+"@"+m[2];
-			t.nodeValue="@"+m[1];
-		}
-	}
-	// the same inside running text ("Replying to @a@x.org and @b@y.org")
-	function shortenText(box){
-		var walk=document.createTreeWalker(box,NodeFilter.SHOW_TEXT),t,full=[];
-		while((t=walk.nextNode())){
-			var v=t.nodeValue,next=v.replace(/@([^\s\/\?#@%,:]{1,50})@([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+(?::\d{1,5})?)/g,function(all,name){full.push(all);return "@"+name});
-			if(next!==v)t.nodeValue=next;
-		}
-		if(full.length)box.title=full.join(", ");
 	}
 	// a bot's extra labels, as badges on the same "Automated by @owner" row
 	function around(box){
@@ -302,19 +277,13 @@ export const BADGES_SCRIPT = String.raw`(function(){
 	}
 	function scan(){
 		document.querySelectorAll(SEL).forEach(function(box){
-			shorten(box);
+			// a box holding other accounts' boxes (the account switcher, a hover card
+			// with a list): each of those is an account of its own, this one isn't
+			if(box.querySelector(SEL))return;
 			var name=handle(box);
 			if(!name)return;
 			if(known[name]){draw(box,name);return}
 			if(known[name]===undefined&&!waiting[name]){waiting[name]=true;queue.push(name)}
-		});
-		// the accounts under the search box carry no badge, only the handle
-		document.querySelectorAll('[data-testid="TypeaheadUser"]').forEach(shorten);
-		// "Replying to @name@example.org" on posts and in the reply composer: links
-		// to accounts from other instances, and the composer's button that names them
-		document.querySelectorAll('a[href*="@"]').forEach(shorten);
-		document.querySelectorAll('[role="dialog"] [role="button"], [data-testid="primaryColumn"] [role="button"]').forEach(function(b){
-			if(b.textContent.indexOf("Replying to")===0&&b.textContent.indexOf("@",1)>=0)shortenText(b);
 		});
 		if(queue.length)load();
 	}

@@ -57,8 +57,10 @@ const DEFAULTS = {
 	// longest post per badge, in X's weighted characters (textlen.ts); grey covers
 	// government organisations and officials
 	post_limits: { none: 4000, blue: 25000, business: 128000, government: 256000 },
+	// posts and replies each account may make in any 24 hours; staff have none
+	daily_caps: { enabled: true, posts: 1000, replies: 3000 },
 	// shown above every timeline until the viewer closes it; a new id shows it again
-	announcement: { id: "", text: "", link: "" },
+	announcement: { id: "", text: "", link: "", buttons: [] as { label: string; url: string }[] },
 	// handles every new account follows
 	default_follows: [] as string[],
 	// the instance's rules, shown at /rules and linked from sign-up

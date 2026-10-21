@@ -87,6 +87,13 @@ const RULES: [RegExp, string][] = [
 	// Analytics hides its charts below 50 followers, which on a small instance
 	// is nearly everyone
 	[/(\w+)=(\w+)\.followerCount>=50,/g, "$1=$2.followerCount>=0,"],
+	// A player card (YouTube links, links.ts) opens as a thumbnail with a play
+	// button, and only a click switches it to the player in its frame
+	// (player-card.ts). One with a frame starts as the player.
+	[
+		/((?<![\w$])([\w$]+)=[\w$]+&&[\w$]+\?[\w$.]+\.getPlayerCardIFrameUrl\([\w$]+\):void 0,[\s\S]{0,6000}?:\{cardState:)([\w$]+\.[\w$]+)\.DEFAULT(,layout:\{\[\3\.DEFAULT\]:\{size:"small"\},\[\3\.CONDENSED\])/g,
+		"$1$2?$3.SECONDARY:$3.DEFAULT$4",
+	],
 	// The same resizer re-encodes every cropped, rotated or oversized image as
 	// JPEG on a canvas it fills white first, so a transparent avatar loses its
 	// background. The canvas stays empty, and one with any transparent pixel

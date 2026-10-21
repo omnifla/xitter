@@ -1,7 +1,14 @@
 {
 	"version": 1,
-	"sequence": 13,
+	"sequence": 16,
 	"instances": [
+		{
+			"id": "cro.corvine.vip",
+			"name": "CRO",
+			"source_url": "https://github.com/Xittered/xitter",
+			"public_key": "OJiGKsH5eTlfBzKyWCe2G0uHIOESe6QV-9sSmVP-iVk",
+			"state": "active"
+		},
 		{
 			"id": "giggleshitter.gay",
 			"name": "giggleshitter",
@@ -28,6 +35,13 @@
 			"name": "Xitter",
 			"source_url": "https://github.com/gabytz777/xitter",
 			"public_key": "aE7RikVEmC2lKQPAkfVtNk1GpJtx87H7PYaLxHxbZTM",
+			"state": "active"
+		},
+		{
+			"id": "social.pixelatedaria.space",
+			"name": "social.pixelatedaria.space",
+			"source_url": "https://github.com/xittered/xitter",
+			"public_key": "yTE4xnSExcGTOgq_JAhElkvce0vif-MxTZefmy-8IeY",
 			"state": "active"
 		},
 		{
@@ -63,6 +77,13 @@
 			"name": "Xitter",
 			"source_url": "https://github.com/Xittered/xitter",
 			"public_key": "FDWBt_uXkSyKKyM2J_9bYLfryG5N0bHFseMprag-Qv8",
+			"state": "active"
+		},
+		{
+			"id": "xitter.plunkinator.org",
+			"name": "Xitter",
+			"source_url": "https://github.com/Xittered/xitter",
+			"public_key": "ovmWzg0FxZlqKk8oaBL6hjK-XGAhUFuh_JnAsW9M8ng",
 			"state": "active"
 		},
 		{

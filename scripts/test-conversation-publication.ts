@@ -12,7 +12,8 @@ async function fixture() {
 	function evaluate(query: any): any[] {
 		const text = textOf(query), values = query.values;
 		let post: any, upload: any, ids: string[];
-		if (text.startsWith("select status, deactivated_at from users")) return [{ status: "active", deactivated_at: null }];
+		if (text.startsWith("select status, deactivated_at, role from users")) return [{ status: "active", deactivated_at: null, role: null }];
+		if (text.startsWith("select count(*)::int as n from posts")) return [{ n: 0 }];
 		if (text.startsWith("select verified_type from users")) return [{ verified_type: null }];
 		if (text.startsWith("select id from media where")) return [...media.values()].filter((row) => row.id === values[0] && row.user_id === values[1] && row.state === "ready" && !row.post_id);
 		if (text.startsWith("insert into posts")) {

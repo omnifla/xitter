@@ -2,10 +2,10 @@ import type { User } from "./auth";
 import { PUBLIC_ORIGIN } from "./config";
 import { sql } from "./db";
 import { INSTANCE_ID } from "./federation";
-import { newId } from "./ids";
+import { idAt, newId } from "./ids";
 import { hateIn } from "./hate";
 import { automodStrike } from "./moderation";
-import { hasBlockedPhrase } from "./settings";
+import { hasBlockedPhrase, settings } from "./settings";
 import { postLimitFor, weightedLength } from "./textlen";
 import type { PostRow } from "./model";
 import { articlesByIds } from "./articles";
@@ -457,8 +457,16 @@ export const seenBy = (userId: string) =>
 export async function createPost(userId: string, input: string, opts: { replyToId?: string; quoteId?: string; articleId?: string; source?: string; communityId?: string; placeId?: string; replyPolicy?: string; db?: typeof sql; skipPreview?: boolean } = {}): Promise<string> {
 	const db = opts.db ?? sql;
 	const text = cleanText(input, { blankLines: 2 });
-	const [author] = await db`select status, deactivated_at from users where id = ${userId}::bigint`;
+	const [author] = await db`select status, deactivated_at, role from users where id = ${userId}::bigint`;
 	if (!author || author.status === "restricted" || author.status === "suspended" || author.deactivated_at) throw new PostError("Your account can't post right now.", 326);
+	const caps = settings().daily_caps;
+	if (caps.enabled && !author.role) {
+		const reply = !!opts.replyToId;
+		const cap = reply ? caps.replies : caps.posts;
+		const [made] = await db`select count(*)::int as n from posts
+			where user_id = ${userId}::bigint and id >= ${idAt(Date.now() - 86_400_000)}::bigint and (reply_to_id is not null) = ${reply}`;
+		if (made.n >= cap) throw new PostError(`You've reached the limit of ${cap} ${reply ? (cap === 1 ? "reply" : "replies") : cap === 1 ? "post" : "posts"} a day. Try again later.`, 185);
+	}
 	await checkLength(userId, text, db);
 	await refuseHate(userId, text);
 	if (hasBlockedPhrase(text)) throw new PostError("Your post contains a phrase this instance doesn't allow.", 186);

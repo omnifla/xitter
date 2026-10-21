@@ -1,5 +1,7 @@
 // Preset palettes, named accents, CHIRP, and the Theme type they instantiate.
 
+import type { StoredSteam } from "../steam-items";
+
 export type Gradient = { stops: string[]; angle: number };
 export type Fill = string | Gradient;
 export type ThemeFont = { ui?: string; display?: string };
@@ -7,19 +9,33 @@ export type ThemeFont = { ui?: string; display?: string };
 declare const mediaIdBrand: unique symbol;
 declare const dimBrand: unique symbol;
 declare const blurBrand: unique symbol;
+declare const scaleBrand: unique symbol;
+declare const panelBrand: unique symbol;
 export type MediaId = string & { readonly [mediaIdBrand]: true };
 export type Dim = number & { readonly [dimBrand]: true };
 export type BlurPx = number & { readonly [blurBrand]: true };
+export type BgScale = number & { readonly [scaleBrand]: true };
+export type PanelOpacity = number & { readonly [panelBrand]: true };
 export type BgFit = "cover" | "contain" | "tile";
 export type BgPosition = "center" | "top" | "bottom";
+export type BgRepeat = "repeat" | "space" | "round";
 
-export type ThemeBackground = {
+export type BackgroundKnobs = {
 	fit: BgFit;
 	position: BgPosition;
 	dim: Dim;
 	blur: BlurPx;
-	mediaId?: MediaId;
+	scale: BgScale;
+	repeat: BgRepeat;
+	panel: PanelOpacity;
 };
+
+export type ThemeBackground =
+	| (BackgroundKnobs & { readonly mediaId?: undefined; readonly steam?: undefined })
+	| (BackgroundKnobs & { readonly mediaId: MediaId; readonly steam?: undefined })
+	| (BackgroundKnobs & { readonly mediaId?: undefined; readonly steam: StoredSteam });
+
+export type ThemeFrame = Omit<Theme, "background"> & { background?: BackgroundKnobs };
 
 export type Theme = {
 	id: string;

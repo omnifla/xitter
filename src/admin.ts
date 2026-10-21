@@ -9,6 +9,7 @@
 // written to the audit log.
 
 import { isSuperadminViewer } from "./superadmin";
+import { oneLine } from "./text-clean";
 import { SUPERADMINS, isSuperadminHome, superadminNameHere, superadminOf } from "./superadmins";
 import { FEDERATION_ON, ID_RE, INSTANCE_ID, acceptKeyChange, isBlocked as isFederationBlocked, isPeer, liftBlock, listBlocks, listed, listedInstance, pendingKeyChange, publicKey, registryCheckedAt, registryError, registrySequence, setBlock as setFederationBlock } from "./federation";
 import { dropRemoteMedia, pullFrom, savedRemoteMedia, storesRemoteMedia } from "./federation-sync";
@@ -621,8 +622,9 @@ const ACTIONS: Record<string, Action> = {
 		run: async (a, b) => {
 			const orgId = idOf(b.orgId, "organisation");
 			if (!(await sql`select 1 from users where id = ${orgId}::bigint`).length) throw new AdminError("No such account.", 404);
-			const [u] = await sql`select id::text as id from users where lower(screen_name) = lower(${String(b.screen_name ?? "").replace(/^@/, "")})`;
+			const [u] = await sql`select id::text as id, instance from users where lower(screen_name) = lower(${String(b.screen_name ?? "").replace(/^@/, "")})`;
 			if (!u) throw new AdminError("No account with that handle.");
+			if (u.instance) throw new AdminError("That account is on another instance. The organisation can ask them from its Organisation page, and they accept on their own instance.");
 			await guard(a, u.id, true);
 			await sql`insert into affiliations (org_id, user_id) values (${orgId}::bigint, ${u.id}::bigint) on conflict do nothing`.catch((e) => {
 				throw /affiliation_limit/.test(String(e?.message)) ? new AdminError(`That account is already an affiliate of ${AFFILIATION_LIMIT} organisations.`) : e;
@@ -806,12 +808,28 @@ const ACTIONS: Record<string, Action> = {
 				await setSetting("post_limits", next);
 				changed.push("post_limits");
 			}
+			if (b.daily_caps && typeof b.daily_caps === "object") {
+				const cap = (v: unknown, name: string) => {
+					const x = Number(v);
+					if (!Number.isInteger(x) || x < 1 || x > 1_000_000) throw new AdminError(`The daily ${name} cap must be a whole number from 1 to 1000000.`);
+					return x;
+				};
+				await setSetting("daily_caps", { enabled: !!b.daily_caps.enabled, posts: cap(b.daily_caps.posts, "post"), replies: cap(b.daily_caps.replies, "reply") });
+				changed.push("daily_caps");
+			}
 			if (b.announcement && typeof b.announcement === "object") {
 				const text = String(b.announcement.text ?? "").trim().slice(0, 500);
-				const link = String(b.announcement.link ?? "").trim();
-				if (link && !/^https?:\/\/\S+$/.test(link)) throw new AdminError("The announcement link must be an http or https address.");
+				const raw = Array.isArray(b.announcement.buttons) ? b.announcement.buttons : [];
+				if (raw.length > 4) throw new AdminError("An announcement has at most 4 buttons.");
+				const buttons = raw
+					.map((x: any) => ({ label: oneLine(String(x?.label ?? "")).slice(0, 30), url: String(x?.url ?? "").trim() }))
+					.filter((x: { label: string; url: string }) => x.label || x.url);
+				for (const x of buttons) {
+					if (!x.label) throw new AdminError("Give every announcement button a label.");
+					if (!/^https?:\/\/\S{1,500}$/.test(x.url)) throw new AdminError(`The link for "${x.label}" must be an http or https address.`);
+				}
 				// a new id brings the banner back for people who closed the old one
-				await setSetting("announcement", { id: text ? newId() : "", text, link });
+				await setSetting("announcement", { id: text ? newId() : "", text, link: "", buttons });
 				changed.push("announcement");
 			}
 			if (Array.isArray(b.default_follows)) {
@@ -887,6 +905,12 @@ for (const [key, p] of Object.entries(PERMISSIONS))
 	for (const name of p.actions)
 		if (ACTIONS[name]?.role !== p.role) throw new Error(`Staff permission ${key}: ${name} ${ACTIONS[name] ? `needs ${ACTIONS[name].role}, not ${p.role}` : "is no action"}.`);
 
+const READS = new Set(
+	"federation platforms mail cards topics me staffPermissions stats users user orgs affiliates posts reports invites settings audit badges labels staffNotes staffMessages appeals handleHistory userSessions blockedNameAccounts articles media operations heldIdentities health security backups archiveImports client checkClient errors inviteTree featureSwitches hashflags oauthApps stickers automodScan".split(
+		" ",
+	),
+);
+
 export async function adminApi(req: Request, action: string, viewer: Viewer | undefined): Promise<Response> {
 	const fail = (message: string, status: number) => Response.json({ error: message }, { status });
 	if (!viewer?.role) return fail("Staff only.", 403);
@@ -908,7 +932,13 @@ export async function adminApi(req: Request, action: string, viewer: Viewer | un
 	if (!mayRun(viewer.role, action, a.role)) return fail(permissionOf(action) ? "An admin hasn't given your role permission to do that." : `Needs the ${a.role} role.`, 403);
 	const body = await req.json().catch(() => ({}));
 	try {
-		return Response.json((await a.run(viewer, body ?? {}, req)) ?? {});
+		const result = await a.run(viewer, body ?? {}, req);
+		if (viewer.superadmin && !READS.has(action)) {
+			const b = (body ?? {}) as Record<string, unknown>;
+			const target = ["id", "userId", "orgId", "screen_name", "instance", "slot"].map((k) => b[k]).find((v) => typeof v === "string" || typeof v === "number");
+			await audit(viewer, `superadmin_${action}`, target === undefined ? null : String(target).slice(0, 200));
+		}
+		return Response.json(result ?? {});
 	} catch (e) {
 		if (e instanceof AdminError) return fail(e.message, e.status);
 		throw e;

@@ -2,6 +2,7 @@
 
 import { validateFamily } from "../fonts";
 import { isId } from "../ids";
+import { readStoredSteam, steamDefId, type SteamDefId, type StoredSteam } from "../steam-items";
 import {
 	ACCENT_IDS,
 	ACCENTS,
@@ -12,16 +13,21 @@ import {
 	themeColorOf,
 	type Accent,
 	type AccentId,
+	type BackgroundKnobs,
 	type BgFit,
 	type BgPosition,
+	type BgRepeat,
+	type BgScale,
 	type BlurPx,
 	type Dim,
+	type PanelOpacity,
 	type Fill,
 	type Gradient,
 	type MediaId,
 	type Theme,
 	type ThemeBackground,
 	type ThemeFont,
+	type ThemeFrame,
 } from "./presets";
 
 export type Sanitised = { theme: Theme; warnings: string[] };
@@ -40,7 +46,17 @@ export type ParsedTheme =
 	| { readonly ok: true; readonly theme: Theme; readonly warnings: readonly string[] }
 	| { readonly ok: false; readonly errors: readonly ThemeError[] };
 
-export type SharedBackground = { fit: BgFit; position: BgPosition; dim: Dim; blur: BlurPx };
+export type SharedBackground = BackgroundKnobs & {
+	readonly steam?: { readonly defid: number };
+	readonly mediaId?: MediaId;
+};
+
+export type BackgroundSource =
+	| { readonly tag: "none" }
+	| { readonly tag: "upload"; readonly mediaId: MediaId }
+	| { readonly tag: "steam"; readonly defid: SteamDefId };
+
+export const STEAM_MISSING = "Steam doesn't have that background.";
 export type ImportedTheme = Omit<Theme, "background"> & { background?: SharedBackground };
 export type ImportResult =
 	| { readonly ok: true; readonly theme: ImportedTheme; readonly warnings: readonly string[] }
@@ -94,7 +110,11 @@ const BACKGROUND_FIELDS = [
 	{ key: "position", share: true, onImport: "take" },
 	{ key: "dim", share: true, onImport: "take" },
 	{ key: "blur", share: true, onImport: "take" },
+	{ key: "scale", share: true, onImport: "take" },
+	{ key: "repeat", share: true, onImport: "take" },
+	{ key: "panel", share: true, onImport: "take" },
 	{ key: "mediaId", share: false, onImport: "forbid" },
+	{ key: "steam", share: false, onImport: "take" },
 ] as const;
 
 const FONT_KEYS = ["ui", "display"] as const;
@@ -102,6 +122,7 @@ const BANNED_KEYS = ["__proto__", "constructor", "prototype"] as const;
 const IMPORT_FORBIDDEN = ["mediaId", "url", "src", "href"] as const;
 const FITS = ["cover", "contain", "tile"] as const;
 const POSITIONS = ["center", "top", "bottom"] as const;
+const REPEATS = ["repeat", "space", "round"] as const;
 const KEY_CAP = THEME_FIELDS.length + 8;
 const ARRAY_CAP = 5;
 
@@ -109,6 +130,11 @@ type Listed = (typeof THEME_FIELDS)[number]["key"];
 type FieldsCoverTheme = Exclude<keyof Theme, Listed> extends never ? (Exclude<Listed, keyof Theme> extends never ? true : never) : never;
 const fieldsCoverTheme: FieldsCoverTheme = true;
 void fieldsCoverTheme;
+
+type ListedBg = (typeof BACKGROUND_FIELDS)[number]["key"];
+type BgCovered = Exclude<keyof ThemeBackground, ListedBg> extends never ? (Exclude<ListedBg, keyof ThemeBackground> extends never ? true : never) : never;
+const bgCovered: BgCovered = true;
+void bgCovered;
 
 export const OPTIONAL_HEX = THEME_FIELDS.filter((f) => f.kind === "hex" && !f.required).map((f) => f.key);
 export const OPTIONAL_FILL = THEME_FIELDS.filter((f) => f.kind === "fill" && !f.required).map((f) => f.key);
@@ -372,6 +398,27 @@ function clampFg(fg: string, bgs: string[]): string {
 const asMediaId = (v: string): MediaId => v as MediaId;
 const asDim = (n: number): Dim => n as Dim;
 const asBlur = (n: number): BlurPx => n as BlurPx;
+const asScale = (n: number): BgScale => n as BgScale;
+const asPanel = (n: number): PanelOpacity => n as PanelOpacity;
+
+function boundedInt(v: unknown, min: number, max: number): number | undefined {
+	if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) return;
+	return v;
+}
+
+function parseRepeat(v: unknown): BgRepeat | undefined {
+	if (typeof v !== "string" || !(REPEATS as readonly string[]).includes(v)) return;
+	return v as BgRepeat;
+}
+
+export function backgroundKnobs(bg: BackgroundKnobs): BackgroundKnobs {
+	return { fit: bg.fit, position: bg.position, dim: bg.dim, blur: bg.blur, scale: bg.scale, repeat: bg.repeat, panel: bg.panel };
+}
+
+export function sharedBackground(bg: ThemeBackground | BackgroundKnobs): SharedBackground {
+	const knobs = backgroundKnobs(bg);
+	return "steam" in bg && bg.steam ? { ...knobs, steam: { defid: bg.steam.defid } } : knobs;
+}
 
 function pushError(errors: ThemeError[], path: string, message: string) {
 	errors.push({ path, message });
@@ -479,8 +526,24 @@ export function copyTheme(theme: Theme): Theme {
 	return out;
 }
 
-function parseTheme(input: unknown, mode: ThemeMode): ParsedTheme {
+function frameOf(theme: Theme): ThemeFrame {
+	const { background, ...rest } = theme;
+	if (!background) return rest;
+	return { ...rest, background: backgroundKnobs(background) };
+}
+
+export function parseTheme(input: unknown, mode: "read"): { ok: true; theme: Theme; warnings: readonly string[] } | { ok: false; errors: readonly ThemeError[] };
+export function parseTheme(input: unknown, mode: "save" | "import"):
+	| { ok: true; theme: ThemeFrame; source: BackgroundSource; warnings: readonly string[] }
+	| { ok: false; errors: readonly ThemeError[] };
+export function parseTheme(
+	input: unknown,
+	mode: ThemeMode,
+):
+	| { ok: true; theme: Theme | ThemeFrame; source?: BackgroundSource; warnings: readonly string[] }
+	| { ok: false; errors: readonly ThemeError[] } {
 	const errors: ThemeError[] = [];
+	let source: BackgroundSource = { tag: "none" };
 	if (!input || typeof input !== "object" || Array.isArray(input)) {
 		return { ok: false, errors: [{ path: "", message: "theme must be an object" }] };
 	}
@@ -579,6 +642,9 @@ function parseTheme(input: unknown, mode: ThemeMode): ParsedTheme {
 			const position = "position" in bgObj ? bgObj.position : "center";
 			const dim = "dim" in bgObj ? bgObj.dim : 0;
 			const blur = "blur" in bgObj ? bgObj.blur : 0;
+			const scale = "scale" in bgObj ? bgObj.scale : 100;
+			const repeat = "repeat" in bgObj ? bgObj.repeat : "repeat";
+			const panel = "panel" in bgObj ? bgObj.panel : 72;
 			if ((FITS as readonly string[]).includes(fit as string)) background.fit = fit as BgFit;
 			else if (mode === "read") background.fit = "cover";
 			else pushError(errors, "background.fit", "invalid fit");
@@ -587,19 +653,67 @@ function parseTheme(input: unknown, mode: ThemeMode): ParsedTheme {
 			else pushError(errors, "background.position", "invalid position");
 			const dimN = typeof dim === "number" && Number.isInteger(dim) && dim >= 0 && dim <= 80 ? dim : undefined;
 			const blurN = typeof blur === "number" && Number.isInteger(blur) && blur >= 0 && blur <= 20 ? blur : undefined;
+			const scaleN = boundedInt(scale, 10, 400);
+			const panelN = boundedInt(panel, 20, 90);
+			const repeatN = parseRepeat(repeat);
 			if (dimN !== undefined) background.dim = asDim(dimN);
 			else if (mode === "read") background.dim = asDim(0);
 			else pushError(errors, "background.dim", "invalid dim");
 			if (blurN !== undefined) background.blur = asBlur(blurN);
 			else if (mode === "read") background.blur = asBlur(0);
 			else pushError(errors, "background.blur", "invalid blur");
-			if ("mediaId" in bgObj) {
+			if (scaleN !== undefined) background.scale = asScale(scaleN);
+			else if (mode === "read") background.scale = asScale(100);
+			else pushError(errors, "background.scale", "invalid scale");
+			if (repeatN) background.repeat = repeatN;
+			else if (mode === "read") background.repeat = "repeat";
+			else pushError(errors, "background.repeat", "invalid repeat");
+			if (panelN !== undefined) background.panel = asPanel(panelN);
+			else if (mode === "read") background.panel = asPanel(72);
+			else pushError(errors, "background.panel", "invalid panel");
+			const hasMedia = "mediaId" in bgObj;
+			const hasSteam = "steam" in bgObj;
+			let readMedia: MediaId | undefined;
+			let readSteam: StoredSteam | undefined;
+			if (mode === "read") {
+				if (hasMedia && isId(bgObj.mediaId)) readMedia = asMediaId(bgObj.mediaId);
+				if (hasSteam) readSteam = readStoredSteam(bgObj.steam);
+				if (readMedia && readSteam) {
+					readMedia = undefined;
+					readSteam = undefined;
+				}
+			} else if (hasMedia && hasSteam) {
+				pushError(errors, "background", "background has two sources");
+			} else if (hasSteam) {
+				const steam = bgObj.steam;
+				if (!steam || typeof steam !== "object" || Array.isArray(steam)) pushError(errors, "background.steam", "invalid steam background");
+				else {
+					const steamObj = steam as Record<string, unknown>;
+					ownUnknown(steamObj, ["defid"], "background.steam", mode, errors);
+					const id = steamDefId(steamObj.defid);
+					if (!id) pushError(errors, "background.steam", "invalid steam background");
+					else source = { tag: "steam", defid: id };
+				}
+			} else if (hasMedia) {
 				if (mode === "import") pushError(errors, "background.mediaId", "forbidden key");
-				else if (isId(bgObj.mediaId)) background.mediaId = asMediaId(bgObj.mediaId);
+				else if (isId(bgObj.mediaId)) source = { tag: "upload", mediaId: asMediaId(bgObj.mediaId) };
 				else if (mode === "save") pushError(errors, "background.mediaId", "invalid media id");
 			}
-			if (background.fit && background.position && background.dim !== undefined && background.blur !== undefined && !errors.some((e) => e.path.startsWith("background")))
-				theme.background = background;
+			if (
+				background.fit &&
+				background.position &&
+				background.dim !== undefined &&
+				background.blur !== undefined &&
+				background.scale !== undefined &&
+				background.repeat &&
+				background.panel !== undefined &&
+				!errors.some((e) => e.path.startsWith("background"))
+			) {
+				const knobs = backgroundKnobs(background);
+				if (readMedia) theme.background = { ...knobs, mediaId: readMedia };
+				else if (readSteam) theme.background = { ...knobs, steam: readSteam };
+				else theme.background = knobs;
+			}
 		}
 	}
 
@@ -626,7 +740,8 @@ function parseTheme(input: unknown, mode: ThemeMode): ParsedTheme {
 	clampOpt("link", theme.link, pageBgs, "link", 4.5);
 	clampOpt("inputText", theme.inputText, [theme.inputBg ?? d.inputBg], "input text", 4.5);
 	clampOpt("secondaryButtonText", theme.secondaryButtonText, theme.secondaryButton ? stopsOf(theme.secondaryButton) : pageBgs, "secondary button text", 4.5);
-	return { ok: true, theme, warnings };
+	if (mode === "read") return { ok: true, theme, warnings };
+	return { ok: true, theme: frameOf(theme), source, warnings };
 }
 
 export function sanitiseTheme(input: unknown): Sanitised | null {
@@ -672,11 +787,12 @@ export function importTheme(text: string): ImportResult {
 	const got = parseTheme(envelope.theme, "import");
 	if (!got.ok) return { ok: false, errors: got.errors.map((e) => ({ path: e.path ? `theme.${e.path}` : "theme", message: e.message })) };
 	const warnings = [...got.warnings];
-	if (got.theme.background) warnings.push(BACKGROUND_OMITTED);
 	const theme = copyTheme(got.theme) as ImportedTheme;
-	if (theme.background) {
-		const { fit, position, dim, blur } = theme.background;
-		theme.background = { fit, position, dim, blur };
+	if (got.source.tag === "steam" && got.theme.background) {
+		theme.background = { ...backgroundKnobs(got.theme.background), steam: { defid: got.source.defid } };
+	} else if (got.theme.background) {
+		warnings.push(BACKGROUND_OMITTED);
+		theme.background = sharedBackground(got.theme.background);
 	}
 	return { ok: true, theme, warnings };
 }
@@ -702,8 +818,7 @@ export function exportTheme(theme: Theme): ThemeFile {
 			continue;
 		}
 		if (field.kind === "background") {
-			const bg = value as ThemeBackground;
-			shared.background = { fit: bg.fit, position: bg.position, dim: bg.dim, blur: bg.blur };
+			shared.background = sharedBackground(value as ThemeBackground);
 			continue;
 		}
 		(shared as Record<string, unknown>)[field.key] = value;
@@ -716,36 +831,49 @@ export function themeFileName(theme: Theme): `${string}.xitter-theme.json` {
 	return `${id}.xitter-theme.json`;
 }
 
-export function mergeSavedBackground(previous: Theme | undefined, theme: Theme, peel: "keep" | "clear" | "frame", mediaIdSent: boolean): Theme {
-	if (PRESETS[theme.id]) {
-		if (!theme.background) return theme;
-		const next = copyTheme(theme);
-		delete next.background;
-		return next;
+export function finishBackground(
+	previous: Theme | undefined,
+	frame: ThemeFrame,
+	peel: "keep" | "clear" | "frame",
+	source: BackgroundSource,
+	resolved: StoredSteam | undefined,
+): { ok: true; theme: Theme } | { ok: false; error: typeof STEAM_MISSING } {
+	if (PRESETS[frame.id]) {
+		const theme = copyTheme(frame);
+		delete theme.background;
+		return { ok: true, theme };
 	}
 	if (peel === "keep") {
-		if (!previous?.background) return theme;
-		const next = copyTheme(theme);
-		next.background = previous.background;
-		return next;
+		const theme = copyTheme(frame);
+		if (previous?.background) theme.background = previous.background;
+		return { ok: true, theme };
 	}
 	if (peel === "clear") {
-		const next = copyTheme(theme);
-		delete next.background;
-		return next;
+		const theme = copyTheme(frame);
+		delete theme.background;
+		return { ok: true, theme };
 	}
-	if (theme.background && !mediaIdSent && previous?.background?.mediaId) {
-		const next = copyTheme(theme);
-		next.background = {
-			fit: theme.background.fit,
-			position: theme.background.position,
-			dim: theme.background.dim,
-			blur: theme.background.blur,
-			mediaId: previous.background.mediaId,
-		};
-		return next;
+	const knobs = frame.background ? backgroundKnobs(frame.background) : undefined;
+	if (!knobs) return { ok: true, theme: copyTheme(frame) };
+	if (source.tag === "steam") {
+		if (!resolved) return { ok: false, error: STEAM_MISSING };
+		const theme = copyTheme(frame);
+		theme.background = { ...knobs, steam: resolved };
+		return { ok: true, theme };
 	}
-	return theme;
+	const theme = copyTheme(frame);
+	if (source.tag === "upload") theme.background = { ...knobs, mediaId: source.mediaId };
+	else if (previous?.background?.mediaId) theme.background = { ...knobs, mediaId: previous.background.mediaId };
+	else if (previous?.background?.steam) theme.background = { ...knobs, steam: previous.background.steam };
+	else theme.background = knobs;
+	return { ok: true, theme };
+}
+
+export function themeForClient(theme: Theme): SharedTheme {
+	const shared = exportTheme(theme).theme;
+	const mediaId = theme.background?.mediaId;
+	if (!mediaId || !shared.background) return shared;
+	return { ...shared, background: { ...shared.background, mediaId } };
 }
 
 export type Mode = "light" | "dark";
@@ -770,7 +898,7 @@ export type LookView = {
 
 export type ClientLook = {
 	readonly night: "0" | "2";
-	readonly theme: Theme | null;
+	readonly theme: SharedTheme | null;
 	readonly accent: string | Gradient;
 	readonly themeColor: AccentId;
 };
@@ -778,7 +906,7 @@ export type ClientLook = {
 export type LookWrite =
 	| { readonly type: "plain"; readonly mode: Mode }
 	| { readonly type: "clear" }
-	| { readonly type: "paint"; readonly theme: Theme; readonly peel: "keep" | "clear" | "frame"; readonly mediaIdSent: boolean }
+	| { readonly type: "paint"; readonly theme: ThemeFrame; readonly peel: "keep" | "clear" | "frame"; readonly source: BackgroundSource }
 	| { readonly type: "keep" };
 
 export type ParsedWrite =
@@ -847,8 +975,8 @@ export function parseLookWrite(body: unknown): ParsedWrite {
 		if (hasMode && mode !== got.theme.base) return { ok: false, error: "invalid mode" };
 		const fromTheme = "accent" in themeBody ? parseAccent(themeBody.accent) ?? parseAccent(got.theme.accent) : undefined;
 		const peel = !("background" in themeBody) ? "keep" : themeBody.background === null ? "clear" : "frame";
-		const mediaIdSent = peel === "frame" && !!themeBody.background && typeof themeBody.background === "object" && "mediaId" in themeBody.background;
-		return { ok: true, write: { type: "paint", theme: got.theme, peel, mediaIdSent }, warnings: got.warnings, accent: extra.accent ?? fromTheme };
+		const source = peel === "frame" ? got.source : { tag: "none" as const };
+		return { ok: true, write: { type: "paint", theme: got.theme, peel, source }, warnings: got.warnings, accent: extra.accent ?? fromTheme };
 	}
 	if (hasMode) {
 		if (!mode) return { ok: false, error: "invalid mode" };
@@ -876,7 +1004,7 @@ export function lookView(look: Look | null, accent: Accent = DEFAULT_ACCENT): Lo
 export function clientLook(look: Look | null, accent: Accent = DEFAULT_ACCENT): ClientLook {
 	return {
 		night: look ? (modeOf(look) === "light" ? "0" : "2") : "2",
-		theme: look?.kind === "painted" ? look.theme : null,
+		theme: look?.kind === "painted" ? themeForClient(look.theme) : null,
 		accent: accentWire(accent),
 		themeColor: themeColorOf(accent),
 	};

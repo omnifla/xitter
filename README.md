@@ -58,6 +58,8 @@ copy during setup, and it stays on that machine.
   sign-in dialog offers them in the username field and with a button, and
   `/account/passkey` has one too; changing or resetting the password removes
   them), password reset by email
+- Moving an account between instances (Settings > Move account,
+  `/account/migrate`): see [Moving accounts](#moving-accounts)
 - Reporting posts and accounts
 - Account analytics (Overview, Content and each post's page) from the
   instance's own counts
@@ -89,6 +91,9 @@ copy during setup, and it stays on that machine.
   week old can import, and staff approve each import first (Admin > Settings,
   Import from X)
 - Polls with a photo on each choice
+- YouTube links (videos, Shorts, live, youtu.be, with `t=` start times) become
+  player cards: the thumbnail comes through `EMBED_PROXY`, and pressing play
+  loads the video in place from youtube-nocookie.com
 - Previews when a public post or profile is shared in other apps (Discord,
   Slack, iMessage…): OpenGraph and Twitter card tags and oEmbed, for active,
   unprotected accounts only. Admin > Settings > Features switches them off
@@ -251,6 +256,8 @@ cache and autovacuum settings; adjust them for the host's memory and workload.
 | `ARCHIVE_MAX_JSON_MB` | `64` | Largest JSON file in an archive (`tweets.js` and its parts) an import reads; it's parsed in memory |
 | `KLIPY_API_KEY` | unset | GIF search through [Klipy](https://klipy.com) (see `src/gifs.ts`); without it or `TENOR_API_KEY` the GIF button is hidden |
 | `TENOR_API_KEY` | unset | GIF search through Tenor's v2 API instead, used when `KLIPY_API_KEY` isn't set |
+| `XITTER_VERSION` | `version` in `package.json` | The version this instance reports in `/.well-known/xitter` and compares when an account moves |
+| `MIGRATION_ALLOW_HTTP`, `MIGRATION_ALLOW_PRIVATE` | unset | `1` lets an account move from an instance over plain HTTP, or on a private network. For test instances only |
 
 Everything else (name, sign-up mode, features, limits, announcement, rules,
 logos) is set in the admin panel.
@@ -260,6 +267,47 @@ logos) is set in the admin panel.
 Instances listed in `instances.json` share public accounts and posts with each
 other. [FEDERATION.md](FEDERATION.md) explains how to set up an instance and
 join the list.
+
+## Moving accounts
+
+An account can move from one Xitter instance to another, federated or not.
+Both sides are on the Move account page (`/account/migrate`):
+
+1. On the old instance, the account makes a migration code with its password.
+   The code works for 24 hours and lets one other instance read the account's
+   data; a new code replaces it.
+2. On the new instance, the account it moves into enters the old instance's
+   address and the code, and presses Check. Nothing is copied yet: the new
+   instance asks the old one what it runs and what the account holds, and shows
+   both side by side.
+   - It refuses when the old instance exports a newer archive format than it
+     reads, when the address is its own, or while another import runs.
+   - It warns, and starts only once the warnings are accepted, when the two run
+     different versions (or the same version with a different database schema,
+     meaning one is modified), when the two don't federate with each other (so
+     the account's follows, likes, replies and the like involving accounts there
+     can't be matched), when the account here already has posts or follows, and
+     when files are over this instance's size limits.
+3. The import runs in the background, with its progress and a report on the
+   same page: files, polls, articles, posts with their threads, quotes, edit
+   history and original times, drafts and scheduled posts, the profile, follows,
+   follow requests, blocks, mutes, muted words, lists, likes, reposts,
+   bookmarks and their folders. Other accounts and posts are matched to the ones
+   this instance already knows (its own, or copies from federation); the report
+   lists accounts it couldn't find. Every object brought over is recorded, so an
+   import that failed, or is run again, only adds what's missing.
+4. When it's done, the old instance records where the account went, cancels its
+   scheduled posts there, and if asked leaves "Moved to @name@instance" as the
+   profile's bio and deactivates the account.
+
+Followers can't be moved for them, and encrypted chats stay behind, since their
+keys never leave the browser. The old instance only answers on the public
+internet over HTTPS unless `MIGRATION_ALLOW_HTTP` and `MIGRATION_ALLOW_PRIVATE`
+are set.
+
+`docker/migration-test.yaml` runs two throwaway instances on ports 3101 and
+3102; `bun scripts/test-migration.ts` moves a seeded account between them and
+checks what arrived (its first lines give the variables).
 
 ## Encrypted chat and key backup
 

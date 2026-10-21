@@ -1,7 +1,8 @@
 // Server-side CSS: deriveTokens, account/boot/page-chrome CSS, font links, background paint.
 
 import { fontSlug } from "../fonts";
-import { CHIRP, fillOfAccent, type Accent, type BgFit, type BgPosition, type BlurPx, type Dim, type Theme } from "./presets";
+import { STEAM_STILL_PATH, STEAM_VIDEO_PATH, steamStillPath, steamVideoPath } from "../steam-items";
+import { CHIRP, fillOfAccent, type Accent, type BgFit, type BgPosition, type BgRepeat, type BgScale, type BlurPx, type Dim, type PanelOpacity, type Theme } from "./presets";
 import { INK, WHITE, derived, fillCss, mixHex, readableOn, rgba, solidOf } from "./validate";
 
 export type BackgroundPaint = {
@@ -11,6 +12,25 @@ export type BackgroundPaint = {
 	readonly position: BgPosition;
 	readonly dim: Dim;
 	readonly blur: BlurPx;
+	readonly scale: number;
+	readonly repeat: BgRepeat;
+	readonly panel: number;
+	readonly movie: string | null;
+	readonly mp4: string | null;
+	readonly defid: number | null;
+};
+
+export type SteamMotion = { readonly defid: number; readonly movie: string | null; readonly mp4: string | null };
+
+export type ChromeSlots = {
+	root: string;
+	image: string;
+	imagePos: "fixed" | "absolute";
+	column: string;
+	nav: string;
+	header: string;
+	sidebar: string;
+	search: string;
 };
 
 export type AccountTokens = {
@@ -135,25 +155,117 @@ function fontFamilyCss(theme: Theme): string {
 }
 
 const PAGE_GATE = "html[data-xitter-theme]:not([data-xitter-decor])";
-const FIT_CSS: Record<BgFit, string> = { cover: "cover", contain: "contain", tile: "auto" };
-const POSITION_CSS: Record<BgPosition, string> = { center: "center", top: "top", bottom: "bottom" };
 
-function cssUrl(path: string): string {
-	if (!/^\/media\/(?:poster\/)?\d{1,19}\.(?:png|gif|webp|jpg)$/.test(path)) return "none";
-	return `url("${path}")`;
+export const PAGE_CHROME_SLOTS: ChromeSlots = {
+	root: "html[data-xitter-theme]",
+	image: `${PAGE_GATE} body`,
+	imagePos: "fixed",
+	// Settings has no primary column: its list and its details are two regions
+	// of the main landmark (the timeline's own region sits inside the column)
+	column: `${PAGE_GATE} [data-testid="primaryColumn"],${PAGE_GATE} main[role="main"] section[role="region"]:not([data-testid="primaryColumn"] *)`,
+	nav: `${PAGE_GATE} header[role="banner"]>div>div`,
+	header: `${PAGE_GATE} [data-testid="primaryColumn"] [role="tablist"]:not([data-testid="toolBar"] *),${PAGE_GATE} [data-testid="primaryColumn"] [style*="position: sticky"]`,
+	// The sidebar's cards and search pill are X's own rounded boxes, found by
+	// their classes in the page script (client.ts paint()), so the glass follows
+	// their corners. Nothing square in the sidebar is frosted here.
+	sidebar: "",
+	search: "",
+};
+
+export const PREVIEW_CHROME_SLOTS: ChromeSlots = {
+	root: "#preview.live",
+	image: "#preview.live",
+	imagePos: "absolute",
+	column: "#preview.live .feed",
+	nav: "#preview.live .nav",
+	header: "#preview.live .tabs",
+	sidebar: "#preview.live .glass",
+	search: "#preview.live .search",
+};
+
+export function cssUrl(path: string): string {
+	if (typeof path !== "string") return "none";
+	if (/^\/media\/(?:poster\/)?\d{1,19}\.(?:png|gif|webp|jpg)$/.test(path) || STEAM_STILL_PATH.test(path)) return `url("${path}")`;
+	return "none";
 }
 
-export function pageChromeCss(paint?: BackgroundPaint): string {
-	if (!paint) return "";
-	const repeat = paint.fit === "tile" ? "repeat" : "no-repeat";
+export function steamMotion(paint: BackgroundPaint | undefined): SteamMotion | null {
+	if (!paint?.defid) return null;
+	if (!paint.movie && !paint.mp4) return null;
+	return { defid: paint.defid, movie: paint.movie, mp4: paint.mp4 };
+}
+
+function finiteOr(v: number | null | undefined, fallback: number): number {
+	return typeof v === "number" && v === v ? v : fallback;
+}
+
+function bgSize(fit: string | undefined, scale: number): string {
+	if (fit === "tile") return scale === 100 ? "auto" : `${scale}%`;
+	if (fit === "cover" || fit === "contain") return scale === 100 ? fit : `${scale}%`;
+	return "auto";
+}
+
+function tileRepeat(fit: string | undefined, repeat: string | undefined): string {
+	if (fit !== "tile") return "no-repeat";
+	if (repeat === "repeat" || repeat === "space" || repeat === "round") return repeat;
+	return "repeat";
+}
+
+function bgPosition(position: string | undefined): string {
+	if (position === "top" || position === "bottom" || position === "center") return position;
+	return "center";
+}
+
+export function pageChromeVars(paint: BackgroundPaint): Record<string, string> {
+	const scale = finiteOr(paint.scale, 100);
+	const panel = finiteOr(paint.panel, 72);
+	const dim = finiteOr(paint.dim, 0);
+	const blur = finiteOr(paint.blur, 0);
 	const still = paint.still ? cssUrl(paint.still) : cssUrl(paint.image);
+	return {
+		"--xt-bg-image": cssUrl(paint.image),
+		"--xt-bg-still": still,
+		"--xt-bg-size": bgSize(paint.fit, scale),
+		"--xt-bg-position": bgPosition(paint.position),
+		"--xt-bg-repeat": tileRepeat(paint.fit, paint.repeat),
+		"--xt-bg-dim": String(dim / 100),
+		"--xt-bg-blur": `${blur}px`,
+		"--xt-bg-panel": `${panel}%`,
+	};
+}
+
+function glassSel(slots: ChromeSlots, sel: string): string {
+	if (slots.imagePos !== "absolute") return sel;
+	return sel.replaceAll("#preview.live", "#preview.live[data-bg]");
+}
+
+export function pageChromeRules(slots: ChromeSlots): string {
+	const img = slots.image;
+	const pos = slots.imagePos;
+	const soft = `${glassSel(slots, slots.column)},${glassSel(slots, slots.header)}`;
+	const hard = [slots.nav, slots.sidebar, slots.search]
+		.filter((sel) => sel)
+		.map((sel) => glassSel(slots, sel))
+		.join(",");
+	const tint = "background:color-mix(in srgb,var(--xt-surface) var(--xt-bg-panel),transparent)!important;";
 	return (
-		`html[data-xitter-theme]{--xt-bg-image:${cssUrl(paint.image)};--xt-bg-still:${still};--xt-bg-size:${FIT_CSS[paint.fit]};--xt-bg-position:${POSITION_CSS[paint.position]};--xt-bg-repeat:${repeat};--xt-bg-dim:${paint.dim / 100};--xt-bg-blur:${paint.blur}px}` +
-		`${PAGE_GATE} body{position:relative;z-index:0}` +
-		`${PAGE_GATE} body::before{content:"";position:fixed;inset:0;z-index:-1;background-image:var(--xt-bg-image);background-size:var(--xt-bg-size);background-position:var(--xt-bg-position);background-repeat:var(--xt-bg-repeat);filter:blur(var(--xt-bg-blur));pointer-events:none}` +
-		`${PAGE_GATE} body::after{content:"";position:fixed;inset:0;z-index:-1;background:rgb(0 0 0 / var(--xt-bg-dim));pointer-events:none}` +
-		`@media (prefers-reduced-motion:reduce){${PAGE_GATE} body::before{animation:none;background-image:var(--xt-bg-still)}}`
+		`${img}{position:relative;z-index:0}` +
+		`${img}::before{content:"";position:${pos};inset:0;z-index:-1;background-image:var(--xt-bg-image);background-size:var(--xt-bg-size);background-position:var(--xt-bg-position);background-repeat:var(--xt-bg-repeat);filter:blur(var(--xt-bg-blur));pointer-events:none}` +
+		`${img}::after{content:"";position:${pos};inset:0;z-index:-1;background:rgb(0 0 0 / var(--xt-bg-dim));pointer-events:none}` +
+		`@media (prefers-reduced-motion:reduce){${img}::before{animation:none;background-image:var(--xt-bg-still)}}` +
+		`${soft}{${tint}-webkit-backdrop-filter:blur(2px)!important;backdrop-filter:blur(2px)!important}` +
+		`${hard}{${tint}-webkit-backdrop-filter:blur(14px)!important;backdrop-filter:blur(14px)!important}` +
+		`@supports not ((-webkit-backdrop-filter:blur(1px)) or (backdrop-filter:blur(1px))){${soft},${hard}{background:color-mix(in srgb,var(--xt-surface) 92%,transparent)!important}}`
 	);
+}
+
+export function pageChromeCss(paint?: BackgroundPaint, slots: ChromeSlots = PAGE_CHROME_SLOTS): string {
+	if (!paint) return "";
+	const vars = pageChromeVars(paint);
+	const block = Object.keys(vars)
+		.map((k) => `${k}:${vars[k]}`)
+		.join(";");
+	return `${slots.root}{${block}}` + pageChromeRules(slots);
 }
 
 export function bootCss(theme: Theme, paint?: BackgroundPaint): string {
@@ -172,22 +284,48 @@ export function bootCss(theme: Theme, paint?: BackgroundPaint): string {
 
 export async function resolveBackground(userId: string, theme: Theme): Promise<BackgroundPaint | undefined> {
 	const bg = theme.background;
-	if (!bg?.mediaId) return;
+	if (!bg) return;
+	const knobs = {
+		fit: bg.fit,
+		position: bg.position,
+		dim: bg.dim,
+		blur: bg.blur,
+		scale: bg.scale ?? (100 as BgScale),
+		repeat: bg.repeat ?? "repeat",
+		panel: bg.panel ?? (72 as PanelOpacity),
+	};
+	if (bg.steam && !bg.mediaId) {
+		const image = steamStillPath(bg.steam);
+		if (!STEAM_STILL_PATH.test(image)) return;
+		const movie = steamVideoPath(bg.steam, "movie");
+		const mp4 = steamVideoPath(bg.steam, "mp4");
+		return {
+			image,
+			still: image,
+			...knobs,
+			movie: movie && STEAM_VIDEO_PATH.test(movie) ? movie : null,
+			mp4: mp4 && STEAM_VIDEO_PATH.test(mp4) ? mp4 : null,
+			defid: bg.steam.defid,
+		};
+	}
+	if (!bg.mediaId) return;
 	const { ownedThemePhoto, themeMediaPath, themePosterPath } = await import("../media");
 	const photo = await ownedThemePhoto(userId, bg.mediaId);
 	if (!photo) return;
 	return {
 		image: themeMediaPath(bg.mediaId, photo.ext),
 		still: photo.poster ? themePosterPath(bg.mediaId) : null,
-		fit: bg.fit,
-		position: bg.position,
-		dim: bg.dim,
-		blur: bg.blur,
+		...knobs,
+		movie: null,
+		mp4: null,
+		defid: null,
 	};
 }
 
+// Hung off the accent attribute, like every accent rule, so that a decorated
+// profile, which takes the attribute away, takes these values with it.
 export function bootAccentCss(accent: Accent): string {
-	return `html{${accentVars(accent)}}`;
+	return `html[data-xitter-accent]{${accentVars(accent)}}`;
 }
 
 export function fontLinks(theme: Theme | null): string {

@@ -19,9 +19,9 @@ export const userCols = (viewerId: string) => sql`
 	u.website as a_website, u.avatar_url as a_avatar_url, u.banner_url as a_banner_url, u.pinned_post_id as a_pinned_post_id, u.protected as a_protected, u.verified_type as a_verified_type, u.verified_at as a_verified_at, u.translator as a_translator, u.flag as a_flag, u.status as a_status, u.instance as a_instance, u.created_at as a_created_at,
 	${badgesOf(sql`u.id`)} as a_badges, u.remote_badges as a_remote_badges,
 	greatest((u.remote_counts->>'posts')::int, ${stat("posts")}) as a_posts,
-	(select json_build_object('id', o.id::text, 'name', o.name, 'screen_name', o.screen_name, 'avatar_url', case when o.org_badge_id is not null then '/public/badge-' || o.org_badge_id::text || '.png' else o.avatar_url end, 'since', af.created_at)
+	(select json_build_object('id', o.id::text, 'name', o.name, 'screen_name', o.screen_name, 'avatar_url', case when o.org_badge_id is not null then '/public/badge-' || o.org_badge_id::text || '.png' else coalesce(o.remote_org_badge, o.avatar_url) end, 'since', af.created_at)
 		from affiliations af join users o on o.id = af.org_id where af.user_id = u.id order by af.created_at, af.org_id limit 1) as a_org,
-	(select json_agg(json_build_object('id', o.id::text, 'name', o.name, 'screen_name', o.screen_name, 'avatar_url', case when o.org_badge_id is not null then '/public/badge-' || o.org_badge_id::text || '.png' else o.avatar_url end) order by af.created_at, af.org_id)
+	(select json_agg(json_build_object('id', o.id::text, 'name', o.name, 'screen_name', o.screen_name, 'avatar_url', case when o.org_badge_id is not null then '/public/badge-' || o.org_badge_id::text || '.png' else coalesce(o.remote_org_badge, o.avatar_url) end) order by af.created_at, af.org_id)
 		from (select * from affiliations x where x.user_id = u.id order by x.created_at, x.org_id offset 1) af join users o on o.id = af.org_id) as a_more_orgs,
 	(select count(*)::int from affiliations af where af.org_id = u.id) as a_affiliates,
 	(select m.screen_name from users m where m.id = u.automated_by) as a_automated_by, u.parody_label as a_parody_label,

@@ -51,8 +51,12 @@ export function hideCss(): string {
 	const off = (Object.keys(BY_FEATURE) as Feature[]).filter((f) => !feature(f)).flatMap((f) => BY_FEATURE[f]);
 	return `${[...ALWAYS, ...off].join(",")}{display:none!important}
 #xitter-announcement{display:flex;gap:12px;align-items:flex-start;padding:12px 16px;background:var(--xt-accent-fill,var(--xt-accent,#1d9bf0));color:#fff;font:15px TwitterChirp,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-#xitter-announcement a{color:#fff;text-decoration:underline}
-#xitter-announcement span{flex:1;white-space:pre-wrap}
+#xitter-announcement .xa-body{flex:1;min-width:0;display:grid;gap:10px}
+#xitter-announcement .xa-text{white-space:pre-wrap;overflow-wrap:break-word}
+#xitter-announcement .xa-buttons{display:flex;flex-wrap:wrap;gap:8px}
+#xitter-announcement .xa-buttons a{display:inline-flex;align-items:center;min-height:32px;padding:0 14px;border-radius:8px;background:rgb(255 255 255 / .2);color:#fff;font-weight:700;font-size:14px;text-decoration:none;white-space:nowrap;transition:background-color 120ms ease-out}
+#xitter-announcement .xa-buttons a:focus-visible{outline:2px solid #fff;outline-offset:2px}
+@media (hover:hover){#xitter-announcement .xa-buttons a:hover{background:rgb(255 255 255 / .3)}}
 #xitter-announcement button{border:0;background:none;color:#fff;font-size:20px;line-height:1;cursor:pointer;padding:0 4px}`;
 }
 
@@ -62,6 +66,7 @@ export function hideCss(): string {
 const TICKET = "M3 6.5A1.5 1.5 0 0 1 4.5 5h15A1.5 1.5 0 0 1 21 6.5V10a2 2 0 0 0 0 4v3.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5V14a2 2 0 0 0 0-4V6.5zM5 7v1.8a4 4 0 0 1 0 6.4V17h14v-1.8a4 4 0 0 1 0-6.4V7H5z";
 // Material Symbols "code"
 const CODE = "M320-240 80-480l240-240 57 57-184 184 183 183-56 56Zm320 0-57-57 184-184-183-183 56-56 240 240-240 240Z";
+const MOVE = "M3 11h13.2l-4.6-4.6L13 5l7 7-7 7-1.4-1.4 4.6-4.6H3v-2z";
 const BUILDING = "M4 21V3h11v4h5v14H4zm2-2h3v-3h2v3h2V5H6v14zm9 0h3V9h-3v10zM8 7h3v2H8V7zm0 4h3v2H8v-2z";
 const SHIELD = "M12 1.5 3.5 5v6c0 5.2 3.6 10 8.5 11.5 4.9-1.5 8.5-6.3 8.5-11.5V5L12 1.5zm0 2.2 6.5 2.7V11c0 4.2-2.8 8.2-6.5 9.4-3.7-1.2-6.5-5.2-6.5-9.4V6.4L12 3.7zM11 7h2v6h-2V7zm0 8h2v2h-2v-2z";
 const ROBOT = "M11 2h2v3h5a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5V2zM6 7v11h12V7H6zm3 3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm6 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm-6 5h6v1.5H9V15z";
@@ -97,6 +102,7 @@ export async function menuLinks(userId: string): Promise<MenuLink[]> {
 	if (FEDERATION_ON) links.push({ href: "/account/instances", text: "Other instances", description: "Hide accounts and organisations from other instances.", icon: GLOBE, viewBox: "0 -960 960 960", where: "settings" });
 	links.push({ href: "/account/passkeys", text: "Passkeys", description: "Sign in with your fingerprint, face or screen lock instead of a password.", icon: KEY, viewBox: "0 -960 960 960", where: "settings" });
 	if (feature("archive_import")) links.push({ href: "/account/import", text: "Import from X", description: "Bring your posts, photos and videos over from your X archive.", icon: UPLOAD, viewBox: "0 -960 960 960", where: "settings" });
+	links.push({ href: "/account/migrate", text: "Move account", description: "Bring your account here from another instance, or take it to another one.", icon: MOVE, where: "settings" });
 	links.push({ href: "/account/api", text: "API", description: "Make tokens that let scripts and bots use your account.", icon: CODE, viewBox: "0 -960 960 960", where: "settings" });
 	links.push({ href: "/account/notes/appeals", text: "Note appeals", description: "Appeal a Community Note or review appeals as staff.", icon: SHIELD, where: "settings" });
 	return links;
@@ -111,7 +117,13 @@ export function tidyData(links: MenuLink[] = []) {
 		menuItems,
 		premium: feature("premium"),
 		imageGen: feature("image_gen"),
-		announcement: s.announcement.text ? s.announcement : null,
+		announcement: s.announcement.text
+			? {
+					id: s.announcement.id,
+					text: s.announcement.text,
+					buttons: s.announcement.buttons?.length ? s.announcement.buttons : s.announcement.link ? [{ label: "More", url: s.announcement.link }] : [],
+				}
+			: null,
 		instance: s.instance_name,
 		source: s.source_url,
 		links,
@@ -296,13 +308,22 @@ export const TIDY_SCRIPT = `(function(){
 		var bar=document.createElement("div");
 		bar.id="xitter-announcement";
 		bar.setAttribute("role","status");
-		var text=document.createElement("span");
-		text.textContent=A.text+" ";
-		if(A.link){var a=document.createElement("a");a.href=A.link;a.target="_blank";a.rel="noopener";a.textContent="More";text.appendChild(a);}
+		var body=document.createElement("div");
+		body.className="xa-body";
+		var text=document.createElement("div");
+		text.className="xa-text";
+		text.textContent=A.text;
+		body.appendChild(text);
+		if(A.buttons&&A.buttons.length){
+			var row=document.createElement("div");
+			row.className="xa-buttons";
+			A.buttons.forEach(function(b){var a=document.createElement("a");a.href=b.url;a.target="_blank";a.rel="noopener";a.textContent=b.label;row.appendChild(a)});
+			body.appendChild(row);
+		}
 		var x=document.createElement("button");
 		x.type="button";x.setAttribute("aria-label","Close");x.textContent="\\u00d7";
 		x.onclick=function(){closed=true;try{localStorage.setItem("xitter-announcement",A.id)}catch(e){}bar.remove();};
-		bar.appendChild(text);bar.appendChild(x);
+		bar.appendChild(body);bar.appendChild(x);
 		col.insertBefore(bar,col.firstChild);
 	}
 	// the side bar shows its labels (and our word mark) only when it is wide

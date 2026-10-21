@@ -7,7 +7,7 @@ import { type RequestOptions, get } from "node:https";
 import { BlockList, type LookupFunction, isIP } from "node:net";
 import { PUBLIC_ORIGIN } from "./config";
 
-export type ClientMetadata = { url: string; name: string; redirects: string[] };
+export type ClientMetadata = { url: string; name: string; redirects: string[]; logo: string | null };
 
 const MAX_BYTES = 16 * 1024;
 const TTL = 5 * 60_000, FAILED_TTL = 60_000;
@@ -122,9 +122,18 @@ function parse(url: string, text: string): ClientMetadata | undefined {
 		}
 	});
 	if (!redirects.length) return undefined;
+	// logo_uri: shown as the app's icon, so like the redirects it stays on the
+	// document's own host
+	let logo: string | null = null;
+	if (typeof doc.logo_uri === "string" && doc.logo_uri.startsWith("https://") && doc.logo_uri.length <= 2048) {
+		try {
+			const u = new URL(doc.logo_uri);
+			if (u.hostname === host && !u.username && !u.password) logo = u.href;
+		} catch {}
+	}
 	const raw = typeof doc.client_name === "string" ? doc.client_name.replace(/\p{Cc}/gu, "").trim() : "";
 	const name = raw && [...raw].length <= 80 ? raw : host;
-	return { url, name, redirects };
+	return { url, name, redirects, logo };
 }
 
 // the app's metadata document, fetched (and kept five minutes, a failure one), or undefined

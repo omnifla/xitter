@@ -79,7 +79,7 @@ const scan = async (label: string) => {
 		const all = document.querySelectorAll("body *");
 		for (const el of all) {
 			if (!(el instanceof HTMLElement) && !(el instanceof SVGElement)) continue;
-			if (el.closest("[data-xitter-badges],[data-xitter-frame],[data-xitter-framed],[data-xitter-decor-bg],.xitter-deco,[aria-label=\"Color options\"],html[data-xitter-decor] [data-testid='primaryColumn']")) continue;
+			if (el.closest("[data-xitter-badges],[data-xitter-frame],[data-xitter-framed],[data-xitter-decor-bg],.xitter-deco,[aria-label=\"Color options\"],html[data-xitter-decor] body")) continue;
 			const goldSvg = el.closest("svg[data-testid=\"icon-verified\"]");
 			if (goldSvg && goldSvg.querySelector("linearGradient,stop")) continue;
 			if (goldSvg) {
