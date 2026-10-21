@@ -109,7 +109,17 @@ export const BADGES_SCRIPT = String.raw`(function(){
 		el.style.textOverflow="ellipsis";
 		el.style.whiteSpace="nowrap";
 	}
-	function drawLabels(box,labels){
+	// React keeps a name's elements when the page moves on to another account
+	// (one profile to the next), with what was drawn for the last one still in
+	// them: that goes. Labels only on the profile's own line; a post's line is
+	// shared with the post it quotes.
+	function forget(box,name){
+		[].forEach.call(box.querySelectorAll("[data-xitter-badges]"),function(r){if(r.closest(SEL)===box&&r.getAttribute("data-xitter-badges")!==name)r.remove()});
+		var line=profileLine(box),row=line&&line.parentElement;
+		if(row)[].forEach.call(row.querySelectorAll("[data-xitter-labels]"),function(l){if(l.getAttribute("data-xitter-labels")!==name)l.remove()});
+		if(!(known[name]&&known[name].gold))[].forEach.call(box.querySelectorAll("svg[data-xitter-gold]"),function(g){g.style.removeProperty("color");g.removeAttribute("data-xitter-gold")});
+	}
+	function drawLabels(box,name,labels){
 		var line=findLine(around(box))||profileLine(box);
 		if(!line)return;
 		var row=line.parentElement;
@@ -123,7 +133,7 @@ export const BADGES_SCRIPT = String.raw`(function(){
 		var h=size&&size.height||"1.25em",w=size&&size.width||"1.25em";
 		labels.forEach(function(l){
 			var wrap=document.createElement("div");
-			wrap.setAttribute("data-xitter-labels","");
+			wrap.setAttribute("data-xitter-labels",name);
 			wrap.style.cssText="display:flex;align-items:center;min-width:0;margin-left:12px";
 			if(l.icon){
 				var iw=document.createElement("div");
@@ -253,8 +263,8 @@ export const BADGES_SCRIPT = String.raw`(function(){
 	function draw(box,name){
 		var k=known[name];
 		// the translator globe X draws (its label is the client's "Translator account")
-		if(k.gold)box.querySelectorAll('svg[aria-label="Translator account"]').forEach(function(g){g.style.setProperty("color","#d4a72c","important")});
-		if(k.labels&&k.labels.length)drawLabels(box,k.labels);
+		if(k.gold)box.querySelectorAll('svg[aria-label="Translator account"]').forEach(function(g){g.style.setProperty("color","#d4a72c","important");g.setAttribute("data-xitter-gold","")});
+		if(k.labels&&k.labels.length)drawLabels(box,name,k.labels);
 		if(!k.badges.length)return;
 		// this name's rows, not those of a name inside it (a hover card's)
 		var mine=[].filter.call(box.querySelectorAll("[data-xitter-badges]"),function(r){return r.closest(SEL)===box});
@@ -264,7 +274,7 @@ export const BADGES_SCRIPT = String.raw`(function(){
 		if(row)mine.forEach(function(r){if(r!==row)r.remove()});
 		else{
 			row=document.createElement("span");
-			row.setAttribute("data-xitter-badges","");
+			row.setAttribute("data-xitter-badges",name);
 			row.style.cssText="display:inline-flex;align-items:center;vertical-align:text-bottom";
 			k.badges.forEach(function(b){
 				var img=document.createElement("img");
@@ -281,6 +291,7 @@ export const BADGES_SCRIPT = String.raw`(function(){
 			// with a list): each of those is an account of its own, this one isn't
 			if(box.querySelector(SEL))return;
 			var name=handle(box);
+			forget(box,name||"");
 			if(!name)return;
 			if(known[name]){draw(box,name);return}
 			if(known[name]===undefined&&!waiting[name]){waiting[name]=true;queue.push(name)}

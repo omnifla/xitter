@@ -37,7 +37,9 @@
 	.card span { color: var(--dim); font-size: 13px; }
 	.table { width: 100%; border-collapse: collapse; }
 	.table th { text-align: left; color: var(--dim); font-weight: 400; font-size: 13px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-	.table td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+	/* a post that's one long word ("aaaa…") stretched the table and pushed every
+	   row's buttons off the side */
+	.table td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; overflow-wrap: anywhere; }
 	.table tr.click { cursor: pointer; }
 	.table tr.click:hover td { background: var(--panel); }
 	.scroll { overflow-x: auto; }
