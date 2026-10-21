@@ -109,7 +109,10 @@ copy during setup, and it stays on that machine.
 - Connected apps: developers register a public client at `/account/apps/developer`,
   users approve read or read-and-write access with OAuth 2 authorization code
   and mandatory PKCE, and revoke access at `/account/apps`. Tokens expire after
-  30 days; `/api` documents the flow.
+  30 days; `/api` documents the flow. Apps can skip registering on each
+  instance by using the URL of a client ID metadata document as their
+  `client_id`, so one app signs in with one tap on every Xitter
+  (`/.well-known/oauth-authorization-server` advertises it).
 - An admin panel at `/admin`: users, standing (restrict, limit, suspend),
   badges (blue, gold organisation, grey government organisation or official),
   translator globes (blue translator, gold translator moderator, yellow approver),

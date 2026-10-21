@@ -1002,6 +1002,13 @@ create table if not exists oauth_codes (
 	expires_at timestamptz not null
 );
 create index if not exists oauth_codes_expires_idx on oauth_codes(expires_at);
+-- Apps identified by a client ID metadata document URL (oauth-metadata.ts)
+-- get a row the first time someone approves them; they have no owner here.
+alter table oauth_clients add column if not exists metadata_url text unique;
+alter table oauth_clients alter column owner_id drop not null;
+-- staff blocks (Admin > OAuth apps); a blocked app is also revoked
+alter table oauth_clients add column if not exists blocked_at timestamptz;
+alter table oauth_clients add column if not exists blocked_reason text;
 alter table api_tokens add column if not exists client_id bigint references oauth_clients(id) on delete cascade;
 alter table api_tokens add column if not exists expires_at timestamptz;
 create index if not exists api_tokens_client_idx on api_tokens(client_id, user_id) where client_id is not null;

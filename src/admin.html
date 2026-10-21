@@ -189,6 +189,7 @@ const PAGES = {
 	cards: { icon: "newspaper", title: "Explore cards" },
 	email: { icon: "mail", title: "Email" },
 	apps: { icon: "devices", title: "Client apps" },
+	oauth: { icon: "key", title: "OAuth apps" },
 	federation: { icon: "hub", title: "Federation" },
 	settings: { icon: "tune", title: "Settings" },
 	errors: { icon: "bug_report", title: "Errors", needs: "errors" },
@@ -715,6 +716,38 @@ const RENDER = {
 			if (!(await ask("Revoke this token? The app's posts keep their label, but it can't post any more."))) return;
 			act(() => api("revokePlatform", { id: b.dataset.revoke }), "Token revoked").then(route);
 		});
+	},
+
+	async oauth(main) {
+		const { apps } = await api("oauthApps");
+		const state = (x) => x.blocked_at ? '<span class="pill suspended">blocked</span>' : x.revoked ? '<span class="pill suspended">revoked by developer</span>' : '<span class="pill">active</span>';
+		const who = (x) => x.metadata_url
+			? 'Client ID <span class="code">' + esc(x.metadata_url) + "</span>, not registered here"
+			: "Registered by " + (x.owner ? "@" + esc(x.owner) : "a deleted account") + ', returns to <span class="code">' + esc(x.redirect_uri) + "</span>";
+		main.innerHTML = "<h1>OAuth apps</h1>" +
+			'<p class="dim">Apps people can sign in to with their account here: ones registered under Developer apps, and ones that use the address of their own client ID document instead (they have no owner here). Blocking an app ends everyone\'s access to it and stops it asking again.</p>' +
+			(can("blockOAuthApp") ? '<div class="box" style="margin-bottom:16px"><h2>Block an app nobody has used yet</h2><div class="row"><input id="obu" placeholder="https://app.example/oauth-client.json" style="flex:2;min-width:220px"><input id="obr" placeholder="Reason" maxlength="500" style="flex:1;min-width:160px"><button class="btn danger" id="obgo">Block</button></div></div>' : "") +
+			'<div class="scroll">' + (apps.length
+				? '<table class="table"><tr><th>App</th><th>People using it</th><th>State</th><th></th></tr>' +
+					apps.map((x) => "<tr><td><b>" + esc(x.name) + '</b><div class="dim small">' + who(x) + "</div>" +
+						(x.blocked_at ? '<div class="dim small">Blocked ' + esc(when(x.blocked_at)) + (x.blocked_reason ? ": " + esc(x.blocked_reason) : "") + "</div>" : "") +
+						"</td><td>" + esc(String(x.grants)) + "</td><td>" + state(x) + "</td><td>" +
+						(x.blocked_at
+							? (can("unblockOAuthApp") ? '<button class="btn" data-unblock="' + esc(x.id) + '">Unblock</button>' : "")
+							: !x.revoked && can("blockOAuthApp") ? '<button class="btn danger" data-block="' + esc(x.id) + '">Block</button>' : "") +
+						"</td></tr>").join("") + "</table>"
+				: '<div class="empty">No OAuth apps yet.</div>') + "</div>";
+		const block = async (body, name) => {
+			if (!(await ask("Block " + name + "? Everyone signed in to it here loses access, and it can't ask again until you unblock it."))) return;
+			act(() => api("blockOAuthApp", body), "Blocked").then(route);
+		};
+		if ($("#obgo")) $("#obgo").onclick = () => block({ url: $("#obu").value.trim(), reason: $("#obr").value }, $("#obu").value.trim());
+		main.querySelectorAll("[data-block]").forEach((b) => b.onclick = async () => {
+			const reason = prompt("Why block it? (optional, staff see this)");
+			if (reason === null) return;
+			block({ id: b.dataset.block, reason }, b.closest("tr").querySelector("b").textContent);
+		});
+		main.querySelectorAll("[data-unblock]").forEach((b) => b.onclick = () => act(() => api("unblockOAuthApp", { id: b.dataset.unblock }), "Unblocked").then(route));
 	},
 
 	async federation(main) {

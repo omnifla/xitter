@@ -46,6 +46,7 @@ import { importRoute, resumeImports } from "./archive-import";
 import { stickerImage, stickerPacks } from "./stickers";
 import { apiTokensRoute, publicApi } from "./public-api";
 import { connectedAppsRoute, developerAppsRoute, oauthAuthorize, oauthToken } from "./oauth";
+import { authorizationServerMetadata } from "./oauth-metadata";
 import { apiDocsPage } from "./api-docs";
 import { hashflagAsset } from "./hashflags";
 import { startMailDigests } from "./mail-digest";
@@ -343,6 +344,7 @@ async function route(req: Request): Promise<Response | undefined> {
 	// the public API signs in with its own tokens, never cookies
 	if (p.startsWith("/api/v1/") || p === "/api/v1") return publicApi(req, url);
 	if (p === "/oauth/token") return oauthToken(req);
+	if (p === "/.well-known/oauth-authorization-server") return authorizationServerMetadata();
 	if (p === "/api" || p === "/api/") return apiDocsPage(req);
 	if (req.method === "OPTIONS") return new Response(null, { status: 204 });
 	if (p === "/login" && req.method === "POST") {

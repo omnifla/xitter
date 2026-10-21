@@ -9,6 +9,7 @@ import { PUBLIC_ORIGIN } from "./config";
 import { sql } from "./db";
 import { isId, newId } from "./ids";
 import { requestIp } from "./login-history";
+import { clientMetadata, metadataClientId } from "./oauth-metadata";
 import { hit, limitedResponse } from "./ratelimit";
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -44,8 +45,11 @@ export async function oauthToken(req: Request): Promise<Response> {
 	if (!limit.ok) return limitedResponse(limit);
 	const f = await form(req);
 	if (!f || value(f, "grant_type") !== "authorization_code") return oauthError("unsupported_grant_type");
-	const clientId = value(f, "client_id"), givenCode = value(f, "code"), verifier = value(f, "code_verifier"), redirect = value(f, "redirect_uri");
-	if (!isId(clientId) || !/^[A-Za-z0-9_-]{43}$/.test(givenCode) || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || !validRedirect(redirect)) return oauthError("invalid_request");
+	const givenId = value(f, "client_id"), givenCode = value(f, "code"), verifier = value(f, "code_verifier"), redirect = value(f, "redirect_uri");
+	// a metadata document URL stands for the row made when it was first approved
+	const clientId = isId(givenId) ? givenId : metadataClientId(givenId) ? (await sql`select id::text from oauth_clients where metadata_url = ${givenId}`)[0]?.id : undefined;
+	if (!clientId) return oauthError(isId(givenId) || metadataClientId(givenId) ? "invalid_grant" : "invalid_request");
+	if (!/^[A-Za-z0-9_-]{43}$/.test(givenCode) || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || !validRedirect(redirect)) return oauthError("invalid_request");
 	const result = await sql.begin(async (tx) => {
 		// DELETE consumes the code even when the verifier or redirect is wrong.
 		const [grant] = await tx`delete from oauth_codes where code_hash = ${digest(givenCode)} returning client_id::text, user_id::text, redirect_uri, scope, code_challenge, expires_at`;
@@ -66,18 +70,27 @@ export async function oauthToken(req: Request): Promise<Response> {
 	return result ? Response.json(result, { headers: cors }) : oauthError("invalid_grant");
 }
 
-type RequestData = { clientId: string; redirect: string; state: string; scope: "read" | "write"; challenge: string; name: string; owner: string };
+// clientId is the client_id as the app sent it; dbId is its oauth_clients row,
+// which a metadata-document app only gets once someone approves it
+type RequestData = { clientId: string; dbId?: string; redirect: string; state: string; scope: "read" | "write"; challenge: string; name: string; owner: string | null };
 
 async function authorization(values: URLSearchParams | FormData): Promise<RequestData | undefined> {
 	const get = (key: string) => String(values.get(key) ?? "");
 	const clientId = get("client_id"), redirect = get("redirect_uri"), state = get("state"), challenge = get("code_challenge");
 	const scope = get("scope");
-	if (get("response_type") !== "code" || get("code_challenge_method") !== "S256" || !isId(clientId) || !validRedirect(redirect) ||
+	if (get("response_type") !== "code" || get("code_challenge_method") !== "S256" || !(isId(clientId) || metadataClientId(clientId)) || !validRedirect(redirect) ||
 		!/^[A-Za-z0-9_-]{43}$/.test(challenge) || state.length < 8 || state.length > 512 || !["read", "write"].includes(scope)) return undefined;
+	if (!isId(clientId)) {
+		const doc = await clientMetadata(clientId);
+		if (!doc || !doc.redirects.includes(redirect)) return undefined;
+		const [row] = await sql`select id::text, revoked from oauth_clients where metadata_url = ${clientId}`;
+		if (row?.revoked) return undefined;
+		return { clientId, dbId: row?.id, redirect, state, scope: scope as "read" | "write", challenge, name: doc.name, owner: null };
+	}
 	const [client] = await sql`select c.name, c.redirect_uri, u.screen_name as owner from oauth_clients c join users u on u.id = c.owner_id
 		where c.id = ${clientId}::bigint and not c.revoked and u.status = 'active'`;
 	if (!client || client.redirect_uri !== redirect) return undefined;
-	return { clientId, redirect, state, scope: scope as "read" | "write", challenge, name: client.name, owner: client.owner };
+	return { clientId, dbId: clientId, redirect, state, scope: scope as "read" | "write", challenge, name: client.name, owner: client.owner };
 }
 
 const redirectWith = (request: RequestData, params: Record<string, string>) => {
@@ -91,6 +104,11 @@ export async function oauthAuthorize(req: Request, url: URL, viewer: Viewer | un
 	if (viewer.status !== "active") return new Response("This account cannot authorize apps.", { status: 403 });
 	const f = req.method === "POST" ? await form(req) : undefined;
 	if (req.method === "POST" && (!f || value(f, "csrf") !== viewer.csrf || (req.headers.get("origin") && req.headers.get("origin") !== PUBLIC_ORIGIN))) return new Response("Invalid authorization form.", { status: 403 });
+	// opening the page may fetch an app's metadata document; keep that bounded
+	if (!f && metadataClientId(url.searchParams.get("client_id") ?? "")) {
+		const limit = hit("endpoint", `oauth-metadata:${viewer.id}`);
+		if (!limit.ok) return limitedResponse(limit);
+	}
 	const request = await authorization(f ?? url.searchParams);
 	if (!request) return new Response("Invalid app authorization request.", { status: 400 });
 	if (f) {
@@ -111,8 +129,15 @@ export async function oauthAuthorize(req: Request, url: URL, viewer: Viewer | un
 			const [account] = await tx`select id from users where id = ${viewer.id}::bigint and status = 'active' and deactivated_at is null and instance is null for update`;
 			if (!account) throw new Error("Account cannot authorize apps.");
 			await tx`delete from oauth_codes where expires_at < now()`;
+			let clientId = request.dbId;
+			if (!isId(request.clientId)) {
+				const [row] = await tx`insert into oauth_clients(id, owner_id, name, redirect_uri, metadata_url) values(${newId()}::bigint, null, ${request.name}, ${request.redirect}, ${request.clientId})
+					on conflict (metadata_url) do update set name = excluded.name, redirect_uri = excluded.redirect_uri returning id::text, revoked`;
+				if (row.revoked) throw new Error("This app has been revoked.");
+				clientId = row.id;
+			}
 			await tx`insert into oauth_codes(code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at)
-				values(${digest(fresh)}, ${request.clientId}::bigint, ${viewer.id}::bigint, ${request.redirect}, ${request.scope}, ${request.challenge}, now() + interval '5 minutes')`;
+				values(${digest(fresh)}, ${clientId}::bigint, ${viewer.id}::bigint, ${request.redirect}, ${request.scope}, ${request.challenge}, now() + interval '5 minutes')`;
 		});
 		return redirectWith(request, { code: fresh });
 	}
@@ -133,7 +158,7 @@ export async function oauthAuthorize(req: Request, url: URL, viewer: Viewer | un
 		? `<form method="post" class="accounts">${hidden}<input type="hidden" name="decision" value="switch">${others.map((u) => `<button name="user_id" value="${esc(u.id)}" class="account">${avatar(u)}<span><b>${esc(u.name || u.screen_name)}</b><span class="dim">@${esc(u.screen_name)}</span></span></button>`).join("")}</form>`
 		: `<p class="dim none">No other accounts are signed in on this browser. Add one from the account menu on the home page, then reopen this link.</p>`;
 	return accountPage({ req, viewer, title: "Authorize app", referrer: "same-origin", css: CONSENT_CSS, body: `<div class="who">${avatar(viewer)}<div class="name"><div class="dim">Signed in as</div><b>${esc(viewer.name || viewer.screen_name)}</b> <span class="dim">@${esc(viewer.screen_name)}</span></div><details class="switch"><summary>Switch account</summary><div class="menu">${accounts}</div></details></div>
-<div class="app"><span class="mark" aria-hidden="true">${initial(request.name)}</span><div><b>${esc(request.name)}</b><div class="dim">By @${esc(request.owner)} · ${esc(new URL(request.redirect).host)}</div></div><span class="pill">${request.scope === "write" ? "Read and write" : "Read only"}</span></div>
+<div class="app"><span class="mark" aria-hidden="true">${initial(request.name)}</span><div><b>${esc(request.name)}</b><div class="dim">${request.owner ? `By @${esc(request.owner)} · ` : "From "}${esc(new URL(request.redirect).host)}</div></div><span class="pill">${request.scope === "write" ? "Read and write" : "Read only"}</span></div>
 <h1>Authorize ${esc(request.name)} to access your account?</h1>
 <section><h2>This app will be able to:</h2>${list(can, CHECK, "yes")}</section>
 <section><h2>It won't be able to:</h2>${list(cannot, CROSS, "no")}</section>
@@ -178,11 +203,11 @@ form.decide button{flex:1 1 0;min-width:0;min-height:44px;font-size:16px}
 `;
 
 async function appsPage(req: Request, viewer: Viewer, message = ""): Promise<Response> {
-	const grants = await sql`select t.id::text, t.scope, t.created_at, t.last_used_at, t.expires_at, c.name, c.id::text as client_id
+	const grants = await sql`select t.id::text, t.scope, t.created_at, t.last_used_at, t.expires_at, c.name, c.id::text as client_id, c.metadata_url
 		from api_tokens t join oauth_clients c on c.id = t.client_id where t.user_id = ${viewer.id}::bigint order by t.created_at desc`;
 	const hidden = `<input type="hidden" name="csrf" value="${esc(viewer.csrf)}">`;
 	return accountPage({ req, viewer, title: "Connected apps", referrer: "same-origin", body: `<h1>Connected apps</h1><p>Apps authorized to use your account. Removing one takes effect immediately.</p>
-${message ? `<p>${esc(message)}</p>` : ""}${grants.length ? grants.map((g) => `<div class="card split"><div><b>${esc(g.name)}</b><div class="dim">${g.scope === "write" ? "Read and write" : "Read only"} · expires ${esc(new Date(g.expires_at).toLocaleDateString())}</div></div><form method="post">${hidden}<input type="hidden" name="id" value="${g.id}"><button class="danger">Remove</button></form></div>`).join("") : `<p class="dim">No connected apps.</p>`}
+${message ? `<p>${esc(message)}</p>` : ""}${grants.length ? grants.map((g) => `<div class="card split"><div><b>${esc(g.name)}</b><div class="dim">${g.metadata_url ? `${esc(new URL(g.metadata_url).host)} · ` : ""}${g.scope === "write" ? "Read and write" : "Read only"} · expires ${esc(new Date(g.expires_at).toLocaleDateString())}</div></div><form method="post">${hidden}<input type="hidden" name="id" value="${g.id}"><button class="danger">Remove</button></form></div>`).join("") : `<p class="dim">No connected apps.</p>`}
 <p><a href="/account/apps/developer">Register an app you are building</a></p>` });
 }
 

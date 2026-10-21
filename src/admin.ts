@@ -29,6 +29,7 @@ import { mailEnabled, mailFrom, sendMail } from "./mail";
 import { mailDigests } from "./mail-digest";
 import { toolActions } from "./admin-tools";
 import { stickerActions } from "./stickers";
+import { oauthAppActions } from "./oauth-admin";
 import { hashflagActions } from "./hashflags";
 import { switchActions } from "./feature-switches";
 import { AFFILIATION_LIMIT } from "./org-manage";
@@ -877,6 +878,7 @@ const ACTIONS: Record<string, Action> = {
 
 Object.assign(ACTIONS, toolActions);
 Object.assign(ACTIONS, stickerActions);
+Object.assign(ACTIONS, oauthAppActions);
 Object.assign(ACTIONS, hashflagActions);
 Object.assign(ACTIONS, switchActions);
 
