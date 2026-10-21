@@ -94,6 +94,14 @@
 		nav button { width: auto; padding: 8px 10px; font-size: 14px; }
 		nav .who { display: none; }
 		main { padding: 16px; }
+		/* a table's last columns (the action buttons) fell off the side of a
+		   phone, behind a sideways scroll nobody noticed: each row stacks instead */
+		.table, .table tbody { display: block; }
+		.table tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+		.table tr:has(> th), .table [hidden] { display: none; }
+		.table td { padding: 0; border-bottom: 0; }
+		.table td:first-child { flex-basis: 100%; }
+		.table .row { flex-wrap: wrap !important; }
 	}
 </style>
 </head>

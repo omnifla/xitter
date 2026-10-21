@@ -1,6 +1,6 @@
 {
 	"version": 1,
-	"sequence": 16,
+	"sequence": 17,
 	"instances": [
 		{
 			"id": "cro.corvine.vip",
@@ -52,6 +52,13 @@
 			"state": "active"
 		},
 		{
+			"id": "x.iambrdn.dev",
+			"name": "xt.brdn",
+			"source_url": "https://github.com/braidenhxyz/xitter-compose",
+			"public_key": "2AbfXEDcr4aaSA5SY6laQbVSfHWvxK1Pbye9A67H3WI",
+			"state": "active"
+		},
+		{
 			"id": "x.transfur.org",
 			"name": "Xitter",
 			"source_url": "https://github.com/Xittered/xitter",
@@ -91,13 +98,6 @@
 			"name": "Xit",
 			"source_url": "https://github.com/Xittered/xitter",
 			"public_key": "C_9Cz5GkJjtSvWngLyVhfSTscLdcYo6Omx_EpSzQU5w",
-			"state": "active"
-		},
-		{
-			"id": "xt.iambrdn.com",
-			"name": "xt.brdn",
-			"source_url": "https://github.com/braidenhxyz/xitter-compose",
-			"public_key": "eiI4EMp0bupFbJ7EKy5A_MIo_yvhRMbljYSnzozwXIY",
 			"state": "active"
 		}
 	]
