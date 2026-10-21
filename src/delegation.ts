@@ -10,6 +10,7 @@
 
 import { type Viewer, viewerById } from "./auth";
 import { isBlockedEitherWay } from "./blocks";
+import { calendarHandlers } from "./calendar";
 import { chatHandlers } from "./chat";
 import { sql } from "./db";
 import { newId } from "./ids";
@@ -63,6 +64,7 @@ const ANALYTICS_OPS = /^(accountOverview|activeFollowersTile|useFetchAnalytics|c
 const CHAT_HARMLESS = new Set(["viewerQuery", "useDirectCallSetupQuery", "GetExternalAppIntegrationsQuery"]);
 export function delegateMay(role: Role, method: string, path: string, operation: string | undefined): boolean {
 	if (operation && Object.hasOwn(chatHandlers, operation) && !CHAT_HARMLESS.has(operation)) return false;
+	if (operation && Object.hasOwn(calendarHandlers, operation)) return false;
 	if (operation && role !== "Admin" && ANALYTICS_OPS.test(operation)) return false;
 	if (operation) return method === "GET" ? !DELEGATE_PRIVATE_READS.test(operation) : !DELEGATE_DENIED_OPS.test(operation);
 	if (DELEGATE_PRIVATE_REST.test(path)) return false;

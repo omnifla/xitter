@@ -145,7 +145,7 @@ function chatUser(u: User, viewerId: string, keyed: boolean, trusted: boolean, e
 }
 
 // one query for the accounts and one for their keys, however many there are
-async function userResults(viewerId: string, ids: string[], opts: { keys?: boolean; tokens?: boolean } = {}) {
+export async function userResults(viewerId: string, ids: string[], opts: { keys?: boolean; tokens?: boolean } = {}) {
 	const found = await usersByIds(viewerId, ids);
 	const users = ids.map((id) => found.get(id)).filter((u): u is User => !!u);
 	const keyed = await hasKey(users.map((u) => u.id));
@@ -548,7 +548,7 @@ type XCallRow = {
     metadata: Record<string, any> | null;
 };
 
-function callCode(): string {
+export function callCode(): string {
     const bytes = randomBytes(9);
     const code = Array.from(bytes, (b) => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
     return `${code.slice(0, 3)}-${code.slice(3, 6)}-${code.slice(6)}`;
@@ -556,6 +556,21 @@ function callCode(): string {
 
 function xcallId(vars: Vars): string {
     return String(vars.call_id ?? vars.callId ?? vars.conference_id ?? vars.id ?? "").trim();
+}
+
+// A scheduled call's meeting link is its code: the call is made when the link
+// is first opened, and made again for the next occurrence once the last ended
+async function ensureMeetingCall(id: string) {
+    if (!id || id.length > 128) return;
+    await sql.begin(async (tx) => {
+        const [meeting] = await tx`select organizer_id::text as organizer from calendar_events where call_code = ${id} and not cancelled`;
+        if (!meeting) return;
+        await tx`insert into xcalls_calls (id, created_by, call_type) values (${id}, ${meeting.organizer}::bigint, 1) on conflict (id) do nothing`;
+        const revived = await tx`update xcalls_calls set status = 'created', ended_at = null, updated_at = now() where id = ${id} and status = 'ended' returning id`;
+        if (!revived.length) return;
+        await tx`delete from xcalls_signals where call_id = ${id}`;
+        await tx`delete from xcalls_participants where call_id = ${id}`;
+    });
 }
 
 async function getXCall(id: string): Promise<XCallRow | undefined> {
@@ -644,6 +659,7 @@ async function startXCall(v: Viewer, vars: Vars) {
 }
 
 async function getXCallPreJoinData(v: Viewer, vars: Vars) {
+    await ensureMeetingCall(xcallId(vars));
     const call = await getXCall(xcallId(vars));
     if (!call || ["ended", "failed"].includes(call.status)) throw new ChatError("Call unavailable.");
     const mayJoin = await authorizeXCall(v, call);
@@ -662,6 +678,7 @@ async function getXCallPreJoinData(v: Viewer, vars: Vars) {
 async function joinXCallRow(v: Viewer, vars: Vars) {
     if (v.status !== "active") throw new ChatError("Your account cannot join calls.");
     const id = xcallId(vars);
+    await ensureMeetingCall(id);
     const call = await getXCall(id);
     if (!call || !["created", "active"].includes(call.status)) throw new ChatError("Call unavailable.");
     await authorizeXCall(v, call);

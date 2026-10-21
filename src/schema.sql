@@ -1546,3 +1546,58 @@ create table if not exists xcalls_signals (
 
 create index if not exists xcalls_signals_call_idx
     on xcalls_signals (call_id, id);
+
+create table if not exists calendar_events (
+    id bigint primary key,
+    organizer_id bigint not null references users(id) on delete cascade,
+    title text,
+    description text,
+    start_min bigint not null,
+    duration_min integer not null default 60 check (duration_min >= 0),
+    tz text not null default 'UTC',
+    rrule text,
+    all_day boolean not null default false,
+    call_code text not null unique,
+    until_min bigint,
+    cancelled boolean not null default false,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists calendar_events_organizer_idx
+    on calendar_events (organizer_id) where not cancelled;
+
+create table if not exists calendar_attendees (
+    event_id bigint not null references calendar_events(id) on delete cascade,
+    user_id bigint not null references users(id) on delete cascade,
+    rsvp text not null default 'NEEDS_ACTION'
+        check (rsvp in ('NEEDS_ACTION', 'ACCEPTED', 'DECLINED', 'TENTATIVE')),
+    primary key (event_id, user_id)
+);
+
+create index if not exists calendar_attendees_user_idx
+    on calendar_attendees (user_id);
+
+create table if not exists calendar_exceptions (
+    event_id bigint not null references calendar_events(id) on delete cascade,
+    occurrence_start_min bigint not null,
+    cancelled boolean not null default false,
+    title text,
+    description text,
+    start_min bigint,
+    duration_min integer,
+    primary key (event_id, occurrence_start_min)
+);
+
+create table if not exists calendar_viewer (
+    event_id bigint not null references calendar_events(id) on delete cascade,
+    user_id bigint not null references users(id) on delete cascade,
+    notify_before_min integer check (notify_before_min between 0 and 10080),
+    metadata text,
+    primary key (event_id, user_id)
+);
+
+create table if not exists calendar_user_metadata (
+    user_id bigint primary key references users(id) on delete cascade,
+    metadata text not null default '{}'
+);
