@@ -104,6 +104,17 @@ try {
 	const again = await batch(a, [calling("StartCall", { audio_only: false, conversation_id: conversation })]);
 	check("a new call can start once the old one ended", again.items[0].status === "OK" && again.items[0].body.x_chat_start_call_result.call.audio_only === false);
 
+	const gqlStart = await gql(a, "xCallsStartCall", { audio_only: false });
+	const gqlLive = gqlStart.body?.data?.xchat_start_call;
+	check("GraphQL StartCall answers in X's shape", typeof gqlLive?.call?.call_id === "string" && gqlLive.call.host_user_id === a.id && gqlLive.call.audio_only === false && typeof gqlLive.call.p2p === "boolean" && /^\d+$/.test(gqlLive.call.created_at_ms));
+	check("and lists the host as the one participant", gqlLive.call.participants.length === 1 && gqlLive.call.participants[0].user_id === a.id && gqlLive.call.participants[0].is_host === true && /^\d+$/.test(gqlLive.call.participants[0].joined_at_ms));
+	const gqlMedia = JSON.parse(gqlLive.media_credentials.payload);
+	check("and carries the media credentials", gqlLive.media_credentials.version === 1 && gqlMedia.broadcast_id === gqlLive.call.call_id && Array.isArray(gqlMedia.ice_servers.uris));
+	const gqlPreJoin = await gql(b, "xCallsGetCallPreJoinData", { call_id: gqlLive.call.call_id }, "GET");
+	check("pre-join data has the call in the same shape", gqlPreJoin.body?.data?.xchat_get_call_pre_join_data?.call?.host_user_id === a.id && gqlPreJoin.body.data.xchat_get_call_pre_join_data.viewer_may_join === true);
+	const gqlJoined = await gql(b, "xCallsJoinCall", { call_id: gqlLive.call.call_id });
+	check("GraphQL JoinCall lists both and gives the joiner credentials", gqlJoined.body?.data?.xchat_join_call?.call?.participants?.length === 2 && JSON.parse(gqlJoined.body.data.xchat_join_call.media_credentials.payload).broadcast_id === gqlLive.call.call_id);
+
 	console.log(`\n${checks} checks passed`);
 } finally {
 	for (const account of accounts) await sql`delete from users where id = ${account.id}::bigint`.catch(() => {});

@@ -595,20 +595,6 @@ async function authorizeXCall(v: Viewer, call: XCallRow) {
     return call.created_by === v.id || !!participant || call.call_type === 1;
 }
 
-function xcallResult(call: XCallRow) {
-    return {
-        id: call.id,
-        call_id: call.id,
-        conversation_id: call.conversation_id,
-        call_type: call.call_type,
-        status: call.status,
-        created_by: call.created_by,
-        created_at: new Date(call.created_at).getTime(),
-        updated_at: new Date(call.updated_at).getTime(),
-        ended_at: call.ended_at ? new Date(call.ended_at).getTime() : null,
-    };
-}
-
 async function createXCall(v: Viewer, vars: Vars) {
     if (v.status !== "active") throw new ChatError("Your account cannot start calls.");
     const conversationId = String(vars.conversation_id ?? vars.conversationId ?? "").trim() || null;
@@ -655,7 +641,7 @@ async function createXCall(v: Viewer, vars: Vars) {
 
 async function startXCall(v: Viewer, vars: Vars) {
     const call = await createXCall(v, vars);
-    return { data: { xchat_start_call: { call: xcallResult(call), media_credentials: null, media_session_id: null } } };
+    return { data: { xchat_start_call: { call: await callingCall(call), media_credentials: mediaCredentials(v.id, call) } } };
 }
 
 async function getXCallPreJoinData(v: Viewer, vars: Vars) {
@@ -668,7 +654,7 @@ async function getXCallPreJoinData(v: Viewer, vars: Vars) {
         where call_id = ${call.id} and state = 'joined'
     `;
     return { data: { xchat_get_call_pre_join_data: {
-        call: xcallResult(call),
+        call: await callingCall(call),
         member_count: count?.member_count ?? 0,
         viewer_may_join: mayJoin,
         auth_token: null,
@@ -717,7 +703,7 @@ async function joinXCallRow(v: Viewer, vars: Vars) {
 
 async function joinXCall(v: Viewer, vars: Vars) {
     const call = await joinXCallRow(v, vars);
-    return { data: { xchat_join_call: { call: xcallResult(call), media_session_id: null } } };
+    return { data: { xchat_join_call: { call: await callingCall(call), media_credentials: mediaCredentials(v.id, call) } } };
 }
 
 async function leaveXCall(v: Viewer, vars: Vars) {
