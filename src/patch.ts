@@ -29,6 +29,10 @@ const RULES: [RegExp, string][] = [
 	// the main client's check of the chat build's address (only that one: other
 	// patterns of the CDN's address decide where auth headers go)
 	[new RegExp(String.raw`https:\\\/\\\/abs\\\.twimg\\\.com\\\/x-web\\\/xchat`, "g"), inRegex(`${PUBLIC_ORIGIN}/abs/x-web/xchat`)],
+	// Calls are another such app: manifest from call.x.com, files from the same CDN
+	[/https:\/\/call\.x\.com\/embed-v1\.json/g, `${PUBLIC_ORIGIN}/xcalls/embed-v1.json`],
+	[new RegExp(String.raw`https:\\\/\\\/call(\(-staging\)\?)?\\\.x\\\.com\\\/embed-v1\\\.json`, "g"), inRegex(`${PUBLIC_ORIGIN}/xcalls/embed-v1.json`)],
+	[new RegExp(String.raw`https:\\\/\\\/abs\\\.twimg\\\.com\\\/x-web\\\/xcalls`, "g"), inRegex(`${PUBLIC_ORIGIN}/abs/x-web/xcalls`)],
 	[/https:\/\/abs\.twimg\.com/g, `${PUBLIC_ORIGIN}/abs`],
 	...API_HOSTS.map((h): [RegExp, string] => [new RegExp(`https://${h.replace(/\./g, "\\.")}`, "g"), PUBLIC_ORIGIN]),
 	...API_HOSTS.map((h): [RegExp, string] => [new RegExp(`"${h.replace(/\./g, "\\.")}"`, "g"), `"${PUBLIC_HOSTNAME}"`]),

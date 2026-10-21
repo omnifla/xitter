@@ -334,11 +334,12 @@ async function route(req: Request): Promise<Response | undefined> {
 		return server.upgrade(req, { data: { userId } }) ? undefined : new Response("expected a websocket", { status: 400 });
 	}
 	if (p.startsWith("/juicebox/")) return juiceboxProxy(req, p.slice("/juicebox/".length));
-	// Chat's manifest: the pinned chat build's own, its addresses ours
-	if (p === "/xchat/embed-v1.json") {
-		const base = loadBuild()?.build.meta.xchatEmbedBuild as string | undefined;
+	// Chat's and calls' manifests: the pinned build's own, its addresses ours
+	const embed = p === "/xchat/embed-v1.json" ? "xchatEmbedBuild" : p === "/xcalls/embed-v1.json" ? "xcallsEmbedBuild" : undefined;
+	if (embed) {
+		const base = loadBuild()?.build.meta[embed] as string | undefined;
 		const raw = base && (await getClientFile(`${new URL(base).pathname}mf-manifest.json`));
-		if (!raw) return new Response("no pinned chat build", { status: 404 });
+		if (!raw) return new Response(`no pinned ${embed === "xchatEmbedBuild" ? "chat" : "calls"} build`, { status: 404 });
 		return new Response(patchText(raw.toString("utf8")), { headers: { "content-type": "application/json", "cache-control": "no-cache" } });
 	}
 	// the public API signs in with its own tokens, never cookies

@@ -21,7 +21,7 @@ import { CDN_ORIGIN, CLIENT_DIR, getClientFile, readCached } from "../src/client
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 const STATE = /window\.__INITIAL_STATE__=(\{.*?\});window\.__META_DATA__=(\{.*?\});/s;
 // page metadata that describes the build, not the account
-const META_KEYS = ["env", "isCanary", "isTwoffice", "hasMultiAccountCookie", "uaParserTags", "cookies", "xchatEmbedBuild"];
+const META_KEYS = ["env", "isCanary", "isTwoffice", "hasMultiAccountCookie", "uaParserTags", "cookies", "xchatEmbedBuild", "xcallsEmbedBuild"];
 
 function arg(name: string): string | undefined {
 	const i = process.argv.indexOf(name);
@@ -43,10 +43,10 @@ async function pageAsGuest(): Promise<string> {
 }
 
 // the signed-in page names the chat build in its metadata; the guest page doesn't
-async function chatBuildAddress(): Promise<string | undefined> {
-	const res = await fetch("https://chat.x.com/embed-v1.json", { headers: { "user-agent": UA } }).catch(() => undefined);
+async function embedBuildAddress(host: string, app: string): Promise<string | undefined> {
+	const res = await fetch(`https://${host}.x.com/embed-v1.json`, { headers: { "user-agent": UA } }).catch(() => undefined);
 	const path = res?.ok ? ((await res.json().catch(() => undefined)) as any)?.metaData?.publicPath : undefined;
-	return typeof path === "string" && /^https:\/\/abs\.twimg\.com\/x-web\/xchat\/embed\/[0-9a-f]+\/$/.test(path) ? path : undefined;
+	return typeof path === "string" && new RegExp(`^https://abs\\.twimg\\.com/x-web/${app}/embed/[0-9a-f]+/$`).test(path) ? path : undefined;
 }
 
 function pageFromHar(file: string): string {
@@ -89,7 +89,7 @@ const guest = !token && !harFile && (process.argv.includes("--latest") || !exist
 if (token || harFile || guest) {
 	const { build, runtime } = snapshot(harFile ? pageFromHar(harFile) : token ? await pageFromToken(token) : await pageAsGuest());
 	if (!build.meta.xchatEmbedBuild) {
-		const chat = await chatBuildAddress();
+		const chat = await embedBuildAddress("chat", "xchat");
 		if (chat) build.meta.xchatEmbedBuild = chat;
 		else console.log("no chat build address found; chat won't load");
 	}
@@ -101,6 +101,13 @@ if (token || harFile || guest) {
 
 // entry scripts, plus every file a capture saw if samples/ exists
 const build: Build = JSON.parse(readFileSync(BUILD_FILE, "utf8"));
+if (!build.meta.xcallsEmbedBuild) {
+	const calls = await embedBuildAddress("call", "xcalls");
+	if (calls) {
+		build.meta.xcallsEmbedBuild = calls;
+		writeFileSync(BUILD_FILE, JSON.stringify(build, null, "\t"));
+	} else console.log("no calls build address found; calls won't load");
+}
 const paths = new Set(build.scripts);
 if (existsSync("samples"))
 	for (const d of readdirSync("samples")) {
