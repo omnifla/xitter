@@ -506,6 +506,16 @@ async function applyEvent(instance: string, e: any) {
 
 const pulling = new Set<string>();
 const wanted = new Set<string>();
+const known = new Set<string>();
+
+// An instance that is down, or doesn't take us yet, was asked again every 15
+// seconds for as long as it failed, each time with a request out and a write
+// here. After a failure the timed pulls wait twice as long each time, up to
+// PULL_BACKOFF_MAX; a pull that works, or a poke from the instance, ends that.
+const PULL_BACKOFF_BASE = 15_000;
+const PULL_BACKOFF_MAX = 15 * 60_000;
+const failing = new Map<string, { failures: number; until: number }>();
+const backingOff = (instance: string) => (failing.get(instance)?.until ?? 0) > Date.now();
 
 export async function pullFrom(instance: string): Promise<number> {
 	if (pulling.has(instance)) {
@@ -515,13 +525,17 @@ export async function pullFrom(instance: string): Promise<number> {
 	pulling.add(instance);
 	let applied = 0;
 	try {
-		await sql`insert into federation_peers (instance) values (${instance}) on conflict do nothing`;
+		if (!known.has(instance)) {
+			await sql`insert into federation_peers (instance) values (${instance}) on conflict do nothing`;
+			known.add(instance);
+		}
 		for (let page = 0; page < 20; page++) {
 			const [peer] = await sql`select cursor::text from federation_peers where instance = ${instance}`;
 			const r = await signedFetch(instance, "GET", `/federation/v1/events?after=${peer.cursor}&limit=${PAGE}`);
 			if (r.status !== 200) throw new FederationError(`${instance} answered ${r.status}`);
 			const doc = r.json();
 			if (!Array.isArray(doc?.events) || !/^\d{1,19}$/.test(String(doc.next))) throw new FederationError(`${instance} sent a malformed page`);
+			failing.delete(instance);
 			const previous = budgets.get(instance);
 			const budget = previous && Date.now() - previous.start <= 3_600_000 ? previous : { start: Date.now(), used: 0 };
 			budgets.set(instance, budget);
@@ -544,6 +558,8 @@ export async function pullFrom(instance: string): Promise<number> {
 			if (!doc.more) break;
 		}
 	} catch (e) {
+		const failures = (failing.get(instance)?.failures ?? 0) + 1;
+		failing.set(instance, { failures, until: Date.now() + Math.min(PULL_BACKOFF_BASE * 2 ** failures, PULL_BACKOFF_MAX) });
 		await sql`update federation_peers set last_error = ${e instanceof Error ? e.message.slice(0, 500) : String(e)}, last_error_at = now() where instance = ${instance}`;
 	} finally {
 		pulling.delete(instance);
@@ -555,6 +571,8 @@ export async function pullFrom(instance: string): Promise<number> {
 const pokes = new Map<string, ReturnType<typeof setTimeout>>();
 function pokeSoon(instance: string) {
 	if (pokes.has(instance) || !isPeer(instance)) return;
+	// it answers again
+	failing.delete(instance);
 	pokes.set(
 		instance,
 		setTimeout(() => {
@@ -709,7 +727,7 @@ export function startFederationSync() {
 	setInterval(() => {
 		tick++;
 		void pokePeers().catch(() => {});
-		if (tick % 5 === 0) for (const p of peers()) void pullFrom(p.id);
+		if (tick % 5 === 0) for (const p of peers()) if (!backingOff(p.id)) void pullFrom(p.id);
 		if (tick % 200 === 10) void backfillMedia().catch((e) => console.error("federation: media backfill:", e instanceof Error ? e.message : e));
 		if (tick % 3600 === 0) void sql`delete from federation_outbox where created_at < now() - interval '60 days'`.catch(() => {});
 	}, 3000).unref();

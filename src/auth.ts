@@ -170,6 +170,10 @@ export async function viewerById(id: string): Promise<Omit<Viewer, "csrf" | "tok
 	return row as Viewer | undefined;
 }
 
+const TOUCH_MS = 60_000;
+const MAX_TOUCHED = 50_000;
+const touched = new Map<string, number>();
+
 async function loadViewer(req: Request): Promise<Viewer | undefined> {
 	const token = parseCookies(req).auth_token;
 	if (!token) return undefined;
@@ -177,12 +181,16 @@ async function loadViewer(req: Request): Promise<Viewer | undefined> {
 		from sessions s join users u on u.id = s.user_id
 		where s.token = ${token} and u.status <> 'suspended' and (s.expires_at is null or s.expires_at > now())
 			and (u.instance is null or (s.superadmin and s.expires_at is not null))`;
-	// for the admin panel's session list; written at most once a minute
-	if (row)
+	// for the admin panel's session list; written at most once a minute, and a
+	// session this server touched within the minute isn't asked again
+	if (row && Date.now() - (touched.get(token) ?? 0) >= TOUCH_MS) {
 		await sql`update sessions set last_seen_at = now(), user_agent = ${(req.headers.get("user-agent") ?? "").slice(0, 500)}
 			where token = ${token} and (last_seen_at < now() - interval '1 minute' or user_agent is null)`;
+		if (touched.size >= MAX_TOUCHED) touched.clear();
+		touched.set(token, Date.now());
+	}
 	// where the account is based, from the edge's country header; kept from the first request that has one
-	const country = row ? requestCountry(req) : undefined;
+	const country = row && !row.country ? requestCountry(req) : undefined;
 	if (country) await sql`update users set country = ${country} where id = ${row.id}::bigint and country is null`;
 	return row as Viewer | undefined;
 }

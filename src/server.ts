@@ -23,7 +23,7 @@ import { loadBuild } from "./build";
 import { MEDIA_DIR, mediaUpload, serveMedia } from "./media";
 import { resumeVideos } from "./video";
 import { livePipeline, restRoute } from "./rest";
-import { shell } from "./shell";
+import { bootScript, shell } from "./shell";
 import { platformSource } from "./platforms";
 import { badgeImage, expireSanctions } from "./moderation";
 import { appealRoute, noticesApi, noticesPage } from "./staff-notices";
@@ -66,6 +66,8 @@ import { serveFont } from "./fonts";
 import { migrationApi } from "./migration";
 import { failInterrupted } from "./migration-import";
 import { migrateRoute } from "./migration-page";
+import { acceptedEncoding, compressResponse, compressedFile } from "./compress";
+import { forgetRanking } from "./ranking";
 
 const MIME: Record<string, string> = {
 	js: "text/javascript; charset=utf-8",
@@ -118,6 +120,7 @@ const MAX_UNKNOWN_PATHS = 1000;
 
 const apiError = (status: number, code: number, message: string) => Response.json({ errors: [{ code, message }] }, { status });
 
+// a hash of each patched file, for its tags
 const etags = new WeakMap<Buffer, string>();
 
 // The panel names the instance in its markup and in its scripts' single-quoted
@@ -156,13 +159,18 @@ async function serveClient(req: Request, pathname: string): Promise<Response> {
 		if (!raw) return new Response("not found", { status: 404 });
 		body = patchFile(cdnPath, raw);
 	}
-	let etag = etags.get(body);
-	if (!etag) {
-		etag = `"${Bun.hash(body).toString(36)}"`;
-		etags.set(body, etag);
+	let hash = etags.get(body);
+	if (!hash) {
+		hash = Bun.hash(body).toString(36);
+		etags.set(body, hash);
 	}
-	if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers: { etag } });
-	return new Response(new Uint8Array(body), { headers: { "content-type": type, "cache-control": "no-cache", etag } });
+	// each encoding is its own representation, with its own tag
+	const encoding = acceptedEncoding(req);
+	const etag = `"${hash}${encoding ? `-${encoding}` : ""}"`;
+	const headers: Record<string, string> = { "content-type": type, "cache-control": "no-cache", etag, vary: "accept-encoding" };
+	if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
+	if (!encoding) return new Response(new Uint8Array(body), { headers });
+	return new Response(await compressedFile(body, encoding), { headers: { ...headers, "content-encoding": encoding } });
 }
 
 const MAX_API_BODY = 2 * 1024 * 1024;
@@ -214,6 +222,8 @@ async function serveApi(req: Request, url: URL, viewer: Viewer | undefined): Pro
 		if (!delegateMay(acting.actor!.role, req.method, path, operation)) return apiError(403, 200, "Delegates can't do this for the account.");
 		viewer = acting;
 	}
+	// a follow, block, mute or like changes what "For you" would rank
+	if (req.method !== "GET") forgetRanking(viewer.id);
 	const limited = limitApi(viewer, req.method, path, operation, url);
 	if (limited) return limited;
 	if (path === "/xitter/moderation") return noticesApi(req, viewer);
@@ -291,7 +301,8 @@ await failInterrupted();
 // the request; caught here it is logged with its path and account
 async function handle(req: Request): Promise<Response | undefined> {
 	try {
-		return await asRequest(() => route(req));
+		const res = await asRequest(() => route(req));
+		return res && (await compressResponse(req, res, new URL(req.url).pathname));
 	} catch (e) {
 		const viewer = await getViewer(req).catch(() => undefined);
 		await recordError("server", e, { path: `${req.method} ${new URL(req.url).pathname}`, userId: viewer?.id });
@@ -310,7 +321,8 @@ async function route(req: Request): Promise<Response | undefined> {
 	}
 	if (p === "/federation/superadmin/accept") return acceptTicket(req, requestIp(req) ?? "unknown");
 	// /i/xitter/* holds Xitter's own static files, served before sign-in and
-	// rate limits: avatar decoration images and the locally cached Google Fonts.
+	// rate limits: avatar decoration images, the locally cached Google Fonts and
+	// the page's own scripts (shell.ts bootScript).
 	// Everything else under this prefix 404s on purpose. Without that line an
 	// unknown or missing file here (a font that failed to download, a stale
 	// decoration link) would fall through to the client shell and come back as
@@ -319,6 +331,13 @@ async function route(req: Request): Promise<Response | undefined> {
 	// reached. JSON endpoints belong under /i/api/xitter/ instead (serveApi).
 	if (p.startsWith("/i/xitter/decoration/")) return (await decorationFile(url)) ?? new Response("not found", { status: 404 });
 	if (p.startsWith("/i/xitter/fonts/")) return serveFont(url, url.searchParams.has("family") && !!(await getViewer(req)));
+	if (p.startsWith("/i/xitter/boot-")) {
+		const body = bootScript(p);
+		if (!body) return new Response("not found", { status: 404 });
+		const headers = { "content-type": MIME.js, "cache-control": "public, max-age=31536000, immutable", vary: "accept-encoding" };
+		const encoding = acceptedEncoding(req);
+		return encoding ? new Response(await compressedFile(body, encoding), { headers: { ...headers, "content-encoding": encoding } }) : new Response(new Uint8Array(body), { headers });
+	}
 	if (p.startsWith("/i/xitter/")) return new Response("not found", { status: 404 });
 	if (req.method !== "GET" && req.method !== "HEAD" && req.headers.has("cookie")) {
 		const site = req.headers.get("sec-fetch-site");

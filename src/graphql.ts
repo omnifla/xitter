@@ -26,7 +26,7 @@ import { trendScope } from "./explore-settings";
 import { activeCards, cardsEntry } from "./explore-cards";
 import { isBlockedEitherWay, blockedIds, blockedFor, outOfView, protectedFor } from "./blocks";
 import { settings } from "./settings";
-import { rankedFeed } from "./ranking";
+import { freshAsOf, rankedFeed } from "./ranking";
 import * as articles from "./articles";
 import type { Viewer } from "./auth";
 import { notificationsTimeline, unreadCount } from "./notifications";
@@ -156,7 +156,7 @@ const forYou: Handler = async (viewer, vars) => {
 	const ranked = /^r(\d+)\.(\d{1,19})$/.exec(cursor);
 	if (cursor && !ranked) return home(false)(viewer, vars);
 	const count = Math.min(Math.max(Number(vars.count) || 20, 1), 100);
-	const asOf = ranked ? ranked[2] : newId();
+	const asOf = ranked ? ranked[2] : await freshAsOf(viewer.id);
 	const offset = ranked ? Number(ranked[1]) : 0;
 	const page = await rankedFeed(viewer.id, { asOf, offset, limit: count });
 	// sort indexes run down from asOf in ranked order, below anything newer

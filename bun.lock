@@ -6,12 +6,12 @@
       "name": "xitter",
       "dependencies": {
         "eld": "2.1.0",
-        "emusks": "^2.3.19",
         "nodemailer": "6.9.16",
       },
       "devDependencies": {
         "@types/bun": "latest",
         "@types/nodemailer": "6.4.17",
+        "emusks": "^2.3.19",
       },
     },
   },
