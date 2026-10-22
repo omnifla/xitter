@@ -52,6 +52,8 @@ const RULES: [RegExp, string][] = [
 	// the upload host is assembled from a variable, which would force https and drop the port
 	[/`https:\/\/\$\{(\w+)\}\/i\/media\//g, "`${location.origin}/i/media/"],
 	[/"x\.com"/g, `"${PUBLIC_HOSTNAME}"`],
+	// the calls app lists X's hosts in backtick strings
+	[/`x\.com`/g, `\`${PUBLIC_HOSTNAME}\``],
 	// cookie domain; a cookie scoped to the original domain is dropped by the browser
 	[/"\.x\.com"/g, `"${PUBLIC_HOSTNAME}"`],
 	[new RegExp(X_VAPID.replace(/[()[\]]/g, (c) => `\\${c}`), "g"), `new Uint8Array([${[...vapidPublicKey].join(",")}])`],

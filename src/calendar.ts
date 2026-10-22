@@ -39,7 +39,7 @@ const RSVPS = ["ACCEPTED", "DECLINED", "TENTATIVE"];
 const WEEKDAYS = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
 
 const gid = (type: string, id: string) => Buffer.from(`${type}:${id}`).toString("base64");
-const meetingUrl = (code: string) => `${PUBLIC_ORIGIN}/i/calls/${code}`;
+const meetingUrl = (code: string) => `${PUBLIC_ORIGIN}/i/call/${code}`;
 const compact = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v != null));
 const minutes = (v: unknown): number | undefined => ((typeof v === "string" || typeof v === "number") && /^-?\d{1,12}$/.test(String(v)) ? Number(v) : undefined);
 const scopeOf = (v: unknown): Scope => (v === "ALL" || v === "THIS_AND_FOLLOWING" ? v : "THIS");

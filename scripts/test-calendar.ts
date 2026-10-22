@@ -70,7 +70,7 @@ try {
 	check("people search finds an account with its ids", found.length === 1 && found[0].typeahead_user.user_results.rest_id === b.id && !!found[0].typeahead_user.user_results.id && !!found[0].typeahead_user.user_results.result.id);
 	check("people search leaves the searcher out", (await gql(b, "scheduledCallsApiSearchPeople", { query: b.name, count: 8 }, "GET")).body.data.search_by_raw_query.x_chat_users_typeahead.length === 0);
 
-	const event = { start_min: String(start), duration_min: 45, title: "Standup", description: "Weekly", tz: "Europe/Kyiv", attendee_user_ids: [b.id], kind: { calling: {} } };
+	const event = { start_min: String(start), duration_min: 45, title: "Standup", description: "Weekly", tz: "Asia/Tokyo", attendee_user_ids: [b.id], kind: { calling: {} } };
 	check("a bad start time is refused", failed(await gql(a, "scheduledCallsApiSchedule", { event: { ...event, start_min: "soon" }, ...window })));
 	check("an invitee that does not exist is refused", failed(await gql(a, "scheduledCallsApiSchedule", { event: { ...event, attendee_user_ids: ["9223372036854775000"] }, ...window })));
 	check("a repeat rule that is not one is refused", failed(await gql(a, "scheduledCallsApiSchedule", { event: { ...event, rrule: "sometimes" }, ...window })));
@@ -79,12 +79,12 @@ try {
 	const made = await gql(a, "scheduledCallsApiSchedule", { event, emailGuests: null, ...window });
 	const created = made.body.data?.calendar_schedule_event?.event;
 	const first = created?.occurrences?.[0];
-	check("scheduling returns the event with its call link", !!created?.rest_id && first?.kind?.__typename === "CallingEvent" && first.kind.meeting_url.startsWith(`${origin}/i/calls/`));
+	check("scheduling returns the event with its call link", !!created?.rest_id && first?.kind?.__typename === "CallingEvent" && first.kind.meeting_url.startsWith(`${origin}/i/call/`));
 	check("the organizer and invitee come back as users", first.organizer.result.rest_id === a.id && first.attendees.length === 1 && first.attendees[0].user_results.result.rest_id === b.id);
 	const code = first.kind.meeting_url.split("/").pop();
 
 	const mine = (await occurrences(a))[0];
-	check("the organizer lists it", mine.title === "Standup" && mine.start_min === String(start) && mine.occurrence_start_min === String(start) && mine.duration_min === 45 && mine.tz === "Europe/Kyiv" && mine.status === "ACTIVE");
+	check("the organizer lists it", mine.title === "Standup" && mine.start_min === String(start) && mine.occurrence_start_min === String(start) && mine.duration_min === 45 && mine.tz === "Asia/Tokyo" && mine.status === "ACTIVE");
 	check("the invitee lists it, waiting for an answer", (await occurrences(b))[0].attendees[0].rsvp_status === "NEEDS_ACTION");
 	check("a stranger does not see it", (await listed(c)).length === 0);
 	check("nor another account's events", (await gql(c, "scheduledCallsApiListUser", { restId: a.id, ...window }, "GET")).body.data.user_result_by_rest_id.result.calendar_events == null);
