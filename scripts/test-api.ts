@@ -92,6 +92,12 @@ const next = paged.json.next_cursor ? await b("GET", `/users/${nameA}/posts?limi
 check(!!next && next.json.data?.[0]?.id !== paged.json.data?.[0]?.id, "paging with next_cursor moves on");
 const found = await b("GET", `/search/posts?q=${encodeURIComponent("api test")}`);
 check(found.json.data?.some((p: any) => p.id === pid), "GET /search/posts");
+const extra = await b("POST", "/posts", { text: `api test paging ${Date.now()}` });
+check(extra.status === 201, "B posts a second match for top-search paging", extra.json);
+const top = `/search/posts?q=${encodeURIComponent("api test")}&sort=top&limit=1`;
+const top1 = await b("GET", top);
+const top2 = top1.json.next_cursor ? await b("GET", `${top}&cursor=${top1.json.next_cursor}`) : undefined;
+check(!!top2 && top2.json.data?.[0]?.id !== top1.json.data?.[0]?.id, "top search paging with next_cursor moves on", { first: top1.json, second: top2?.json });
 const people = await b("GET", `/search/users?q=${encodeURIComponent(nameA)}`);
 check(people.json.data?.some((u: any) => u.screen_name.toLowerCase() === nameA.toLowerCase()), "GET /search/users");
 
@@ -110,6 +116,7 @@ check((await a("POST", `/users/${nameA}/follow`)).status === 400, "following you
 check((await b("DELETE", `/posts/${pid}`)).status === 403, "B can't delete A's post");
 
 // clean up
+await b("DELETE", `/posts/${extra.json.data?.id}`);
 await b("DELETE", `/posts/${reply.json.data?.id}`);
 await b("DELETE", `/posts/${quote.json.data?.id}`);
 const del = await a("DELETE", `/posts/${pid}`);

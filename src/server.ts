@@ -85,7 +85,11 @@ const MIME: Record<string, string> = {
 // dev mode it calls the bare paths.
 // The client also calls outside services on its own (grok.com checkout, ads
 // measurement). Requests from the page may only reach this instance.
-const PAGE_CSP = "connect-src 'self' blob: data:; font-src 'self'";
+const SETTINGS_PAGES = new Set(
+	["apps", "invites", "organisation", "decor", "theme", "decoration", "automation", "notices", "instances", "passkeys", "import", "migrate", "api", "notes/appeals", "email", "2fa"].map((s) => `/account/${s}`),
+);
+
+const PAGE_CSP ="connect-src 'self' blob: data:; font-src 'self'";
 
 // the instance's own files (logo, icons), open to everyone since the sign-in page uses them
 const PUBLIC_DIR = process.env.PUBLIC_DIR ?? "public";
@@ -403,11 +407,11 @@ async function route(req: Request): Promise<Response | undefined> {
 	// people sign in and up on the signed-out home page; an invite link's code
 	// is kept for the dialog, which then skips asking for it
 	// X's own add-email flow: ours is a page
-	if (p === "/i/flow/add_email") return Response.redirect("/account/email", 302);
+	if (p === "/i/flow/add_email") return Response.redirect("/settings/xitter/email", 302);
 	// and X's automated-account flow (automation.ts)
-	if (p === "/i/flow/enable_automated_account") return Response.redirect("/account/automation", 302);
+	if (p === "/i/flow/enable_automated_account") return Response.redirect("/settings/xitter/automation", 302);
 	// and X's passkey settings and flows: ours is a page (passkeys.ts)
-	if (/^\/(settings|i\/flow)\/.*passkey/i.test(p)) return Response.redirect("/account/passkeys", 302);
+	if (/^\/(settings|i\/flow)\/.*passkey/i.test(p) && !p.startsWith("/settings/xitter/")) return Response.redirect("/settings/xitter/passkeys", 302);
 	// the built-in "All" list (lists.ts)
 	if (p === "/all") return Response.redirect("/i/lists/1", 302);
 	if (p === "/login" || p === "/signup" || p.startsWith("/i/flow/")) {
@@ -433,6 +437,10 @@ async function route(req: Request): Promise<Response | undefined> {
 		if (API_PREFIX.test(p) || req.method !== "GET") return apiError(503, 130, settings().operations.message);
 		return maintenancePage();
 	}
+	// opened on their own (a link, a bookmark), the settings pages come up inside
+	// the client's Settings, which frames them (tidy.ts)
+	if (viewer && req.method === "GET" && req.headers.get("sec-fetch-dest") === "document" && SETTINGS_PAGES.has(p))
+		return Response.redirect(`/settings/xitter/${p.slice("/account/".length)}${url.search}`, 302);
 	if (p === "/oauth/authorize") return oauthAuthorize(req, url, viewer);
 	if (p === "/account/apps" && viewer) return connectedAppsRoute(req, viewer);
 	if (p === "/account/apps/developer" && viewer) return developerAppsRoute(req, viewer);

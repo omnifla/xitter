@@ -15,6 +15,7 @@ import { FEDERATION_ON, ID_RE, INSTANCE_ID, acceptKeyChange, isBlocked as isFede
 import { dropRemoteMedia, pullFrom, savedRemoteMedia, storesRemoteMedia } from "./federation-sync";
 import type { Viewer } from "./auth";
 import { sql } from "./db";
+import { isOrganizationSql } from "./users";
 import { flagValue, unknownFlag } from "./flags";
 import { isId, newId } from "./ids";
 import { createInvite, staffHandleProblem } from "./invites";
@@ -585,7 +586,7 @@ const ACTIONS: Record<string, Action> = {
 	orgs: {
 		role: "support",
 		run: async (_a, b) => ({
-			orgs: await sql`select ${userListCols} from users u where (u.verified_type in ('business', 'government') or exists (select 1 from affiliations af where af.org_id = u.id)) ${homeFilter(b.home)} order by u.name`,
+			orgs: await sql`select ${userListCols} from users u where ${isOrganizationSql(sql`u`)} ${homeFilter(b.home)} order by u.name`,
 		}),
 	},
 

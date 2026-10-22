@@ -15,9 +15,18 @@
 	.app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
 	nav { border-right: 1px solid var(--line); padding: 16px 12px; position: sticky; top: 0; height: 100vh; height: 100dvh; overflow-y: auto; overscroll-behavior: contain; }
 	nav .logo { width: 128px; margin: 4px 8px 20px; display: block; }
-	nav button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: 0; border-radius: 999px; background: none; color: var(--text); font: inherit; font-size: 16px; text-align: left; cursor: pointer; }
+	nav button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 7px 12px; border: 0; border-radius: 999px; background: none; color: var(--text); font: inherit; font-size: 15px; text-align: left; cursor: pointer; }
 	nav button:hover { background: var(--panel); }
 	nav button.on { font-weight: 700; }
+	/* 28 pages didn't fit a laptop screen: they sit in groups, one open at a time */
+	nav .ghead { margin-top: 6px; color: var(--dim); font-size: 14px; font-weight: 600; }
+	nav .ghead > span:first-child { flex: 1; }
+	nav .ghead .icon { transition: rotate .15s; }
+	nav .group.open .ghead { color: var(--text); }
+	nav .group.open .ghead .icon { rotate: 180deg; }
+	nav .gitems { display: none; }
+	nav .group.open .gitems, nav .group.solo .gitems { display: block; }
+	nav .end { margin-top: 12px; }
 	nav .who { margin-top: 24px; padding: 0 12px; color: var(--dim); font-size: 13px; }
 	main { padding: 20px 24px 64px; max-width: 1100px; min-width: 0; }
 	h1 { margin: 0 0 16px; font-size: 22px; }
@@ -95,6 +104,13 @@
 		nav .logo { display: none; }
 		nav button { width: auto; padding: 8px 10px; font-size: 14px; }
 		nav .who { display: none; }
+		/* the groups make one row of chips, the open one's pages a row below */
+		nav .group, nav .group.solo .gitems, nav .end { display: contents; }
+		nav .ghead { margin-top: 0; }
+		nav .ghead .icon { display: none; }
+		nav .group.open .ghead { font-weight: 700; background: var(--panel); }
+		nav .gitems { order: 1; flex-basis: 100%; }
+		nav .group.open .gitems { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
 		main { padding: 16px; }
 		/* a table's last columns (the action buttons) fell off the side of a
 		   phone, behind a sideways scroll nobody noticed: each row stacks instead */
@@ -214,6 +230,19 @@ const PAGES = {
 	audit: { icon: "history", title: "Audit log" },
 };
 
+const GROUPS = [
+	[null, ["overview"]],
+	["Moderation", ["reports", "appeals", "automod", "posts", "articles", "media"]],
+	["People", ["users", "orgs", "invites", "badges"]],
+	["Content", ["stickers", "hashflags", "topics", "cards"]],
+	["Instance", ["settings", "switches", "email", "apps", "oauth", "federation", "hosting"]],
+	["Staff and system", ["permissions", "security", "audit", "errors", "backups", "client"]],
+];
+function openGroup(g, on) {
+	g.classList.toggle("open", on);
+	g.querySelector(".ghead")?.setAttribute("aria-expanded", String(on));
+}
+
 function go(hash) { location.hash = hash; }
 window.addEventListener("hashchange", route);
 
@@ -221,6 +250,8 @@ async function route() {
 	const [page, arg] = location.hash.slice(1).split("/");
 	const name = PAGES[page] ? page : page === "user" ? "users" : "overview";
 	document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.page === name));
+	const cur = $('nav [data-page="' + name + '"]');
+	document.querySelectorAll("nav .group").forEach((g) => openGroup(g, g.contains(cur)));
 	const main = $("#main");
 	main.innerHTML = '<div class="empty">Loading…</div>';
 	try {
@@ -1270,6 +1301,12 @@ async function refreshCounts() {
 		b.querySelector(".count")?.remove();
 		if (n) b.insertAdjacentHTML("beforeend", '<span class="count">' + n + "</span>");
 	}
+	// a shut group still shows what waits inside it
+	document.querySelectorAll("nav .ghead").forEach((h) => {
+		h.querySelector(".count")?.remove();
+		const n = [...h.parentNode.querySelectorAll(".gitems .count")].reduce((sum, c) => sum + Number(c.textContent), 0);
+		if (n) h.firstChild.insertAdjacentHTML("afterend", '<span class="count">' + n + "</span>");
+	});
 }
 
 // which instances' accounts the Users and Organisations lists show (sessionStorage "userHome")
@@ -1446,11 +1483,23 @@ async function renderUser(main, id) {
 		$("#main").innerHTML = '<div class="empty">' + esc(e.message) + ' <a href="/home">Back to {{instance}}</a></div>';
 		return;
 	}
-	$("#nav").insertAdjacentHTML("beforeend", Object.entries(PAGES).filter(([, p]) => !p.needs || can(p.needs)).map(([k, p]) => '<button data-page="' + k + '"><span class="icon">' + p.icon + "</span>" + esc(p.title) + "</button>").join("") +
+	const item = (k) => '<button data-page="' + k + '"><span class="icon">' + PAGES[k].icon + "</span>" + esc(PAGES[k].title) + "</button>";
+	$("#nav").insertAdjacentHTML("beforeend", GROUPS.map(([title, keys]) => {
+		const shown = keys.filter((k) => !PAGES[k].needs || can(PAGES[k].needs));
+		if (!shown.length) return "";
+		return '<div class="group' + (title ? "" : " solo") + '">' +
+			(title ? '<button class="ghead" aria-expanded="false"><span>' + esc(title) + '</span><span class="icon">expand_more</span></button>' : "") +
+			'<div class="gitems">' + shown.map(item).join("") + "</div></div>";
+	}).join("") +
+		'<div class="end">' +
 		(me.superadmin_home ? '<button onclick="location.href=\'/federation/superadmin\'"><span class="icon">shield_person</span>Superadmin</button>' : "") +
 		'<button onclick="location.href=\'/home\'"><span class="icon">arrow_back</span>Back to {{instance}}</button>' +
-		'<div class="who">@' + esc(me.screen_name) + " · " + esc(me.superadmin ? "superadmin" : me.role) + "</div>");
+		'<div class="who">@' + esc(me.screen_name) + " · " + esc(me.superadmin ? "superadmin" : me.role) + "</div></div>");
 	document.querySelectorAll("nav [data-page]").forEach((b) => b.onclick = () => go(b.dataset.page));
+	document.querySelectorAll("nav .ghead").forEach((h) => h.onclick = () => {
+		const g = h.parentNode, on = !g.classList.contains("open");
+		document.querySelectorAll("nav .group").forEach((x) => openGroup(x, on && x === g));
+	});
 	refreshCounts();
 	route();
 })();
